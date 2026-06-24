@@ -1006,3 +1006,22 @@ WEB_STATS_PATHS_PREAGG_MIRROR_PATHKEY_TEAM_IDS: list[int] = [
         get_from_env("WEB_STATS_PATHS_PREAGG_MIRROR_PATHKEY_TEAM_IDS", _LAZY_PRECOMPUTE_DEFAULT_TEAM_IDS)
     )
 ]
+
+# Cohort the weekly AI path-cleaning-suggestion job runs for. Defaults to the precompute enrollment
+# list (the teams "selected to test out precomputed analytics tables") so the two cohorts track each
+# other unless explicitly overridden. Comma-separated env-var override, like the lists above.
+WEB_ANALYTICS_PATH_CLEANING_SUGGESTIONS_TEAM_IDS: list[int] = [
+    int(team_id)
+    for team_id in get_list(
+        get_from_env(
+            "WEB_ANALYTICS_PATH_CLEANING_SUGGESTIONS_TEAM_IDS",
+            ",".join(str(t) for t in WEB_ANALYTICS_LAZY_PRECOMPUTE_TEAM_IDS),
+        )
+    )
+]
+
+# Model the path-cleaning-suggestion job sends to the LLM gateway. Must be in the `web_analytics`
+# product allowlist in services/llm-gateway/src/llm_gateway/products/config.py.
+WEB_ANALYTICS_PATH_CLEANING_SUGGESTIONS_MODEL: str = get_from_env(
+    "WEB_ANALYTICS_PATH_CLEANING_SUGGESTIONS_MODEL", "claude-haiku-4-5"
+)

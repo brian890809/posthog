@@ -1,0 +1,173 @@
+from posthog.test.base import BaseTest
+from unittest.mock import patch
+
+from parameterized import parameterized
+
+from products.web_analytics.backend.models import WebAnalyticsPathCleaningSuggestion
+from products.web_analytics.backend.path_cleaning_suggestions import service
+from products.web_analytics.backend.path_cleaning_suggestions.prompts import SuggestedRule, SuggestedRulesResponse
+from products.web_analytics.backend.path_cleaning_suggestions.service import (
+    AnnotatedRule,
+    apply_suggestions_to_team,
+    generate_suggestions_for_team,
+    validate_and_annotate_rules,
+)
+
+SAMPLE_PATHS = [
+    ("/users/123/profile", 100),
+    ("/users/456/profile", 80),
+    ("/users/789/profile", 60),
+    ("/about", 40),
+]
+
+
+class TestValidateAndAnnotateRules(BaseTest):
+    def test_keeps_valid_rule_with_dense_order_and_annotations(self) -> None:
+        rules = [SuggestedRule(regex=r"/users/\d+/profile", alias="/users/<id>/profile", reason="user id")]
+        annotated = validate_and_annotate_rules(rules, SAMPLE_PATHS)
+
+        self.assertEqual(len(annotated), 1)
+        rule = annotated[0]
+        self.assertEqual(rule.order, 0)
+        self.assertEqual(rule.match_count, 3)  # 3 of 4 sampled paths match
+        self.assertEqual(rule.examples[0], {"before": "/users/123/profile", "after": "/users/<id>/profile"})
+
+    @parameterized.expand(
+        [
+            ("invalid_regex", r"/users/(\d+/profile", "/users/<id>/profile"),  # unbalanced paren -> re2 error
+            ("matches_nothing", r"/orders/\d+$", "/orders/<id>"),  # no /orders path in sample
+            ("empty_regex", "", "/x"),
+            ("empty_alias", r"/users/\d+", ""),
+        ]
+    )
+    def test_drops_unusable_rules(self, _name: str, regex: str, alias: str) -> None:
+        annotated = validate_and_annotate_rules([SuggestedRule(regex=regex, alias=alias)], SAMPLE_PATHS)
+        self.assertEqual(annotated, [])
+
+    def test_renumbers_order_densely_when_a_rule_is_dropped(self) -> None:
+        rules = [
+            SuggestedRule(regex=r"/orders/\d+$", alias="/orders/<id>"),  # dropped: matches nothing
+            SuggestedRule(regex=r"/users/\d+/profile", alias="/users/<id>/profile"),  # kept
+        ]
+        annotated = validate_and_annotate_rules(rules, SAMPLE_PATHS)
+        self.assertEqual(len(annotated), 1)
+        self.assertEqual(annotated[0].order, 0)
+
+
+class TestExtractJson(BaseTest):
+    @parameterized.expand(
+        [
+            ("plain", '{"rules": []}'),
+            ("fenced", '```json\n{"rules": []}\n```'),
+            ("prose_wrapped", 'Here are the rules:\n{"rules": []}\nHope that helps!'),
+        ]
+    )
+    def test_extracts_json_object(self, _name: str, content: str) -> None:
+        self.assertEqual(service._extract_json(content), {"rules": []})
+
+    def test_raises_without_json(self) -> None:
+        with self.assertRaises(ValueError):
+            service._extract_json("no json here")
+
+
+class TestApplySuggestionsToTeam(BaseTest):
+    def _rule(self, regex: str, alias: str) -> AnnotatedRule:
+        return AnnotatedRule(regex=regex, alias=alias, order=0, reason="", match_count=1, examples=[])
+
+    def test_appends_to_empty_with_sequential_order(self) -> None:
+        self.team.path_cleaning_filters = []
+        self.team.save()
+        added = apply_suggestions_to_team(
+            self.team,
+            [self._rule(r"/users/\d+", "/users/<id>"), self._rule(r"/orders/\d+", "/orders/<id>")],
+        )
+        self.team.refresh_from_db()
+        self.assertEqual(added, 2)
+        self.assertEqual([f["order"] for f in self.team.path_cleaning_filters], [0, 1])
+
+    def test_merges_without_overwriting_and_dedupes(self) -> None:
+        self.team.path_cleaning_filters = [{"regex": r"/users/\d+", "alias": "/users/<id>", "order": 0}]
+        self.team.save()
+        added = apply_suggestions_to_team(
+            self.team,
+            [
+                self._rule(r"/users/\d+", "/users/<id>"),  # duplicate regex -> skipped
+                self._rule(r"/orders/\d+", "/orders/<id>"),  # new -> appended after max order
+            ],
+        )
+        self.team.refresh_from_db()
+        self.assertEqual(added, 1)
+        self.assertEqual(len(self.team.path_cleaning_filters), 2)
+        self.assertEqual(
+            self.team.path_cleaning_filters[1], {"regex": r"/orders/\d+", "alias": "/orders/<id>", "order": 1}
+        )
+
+    def test_no_rules_is_noop(self) -> None:
+        self.team.path_cleaning_filters = [{"regex": r"/a", "alias": "/b", "order": 0}]
+        self.team.save()
+        added = apply_suggestions_to_team(self.team, [])
+        self.team.refresh_from_db()
+        self.assertEqual(added, 0)
+        self.assertEqual(len(self.team.path_cleaning_filters), 1)
+
+
+class TestGenerateSuggestionsForTeam(BaseTest):
+    def test_skips_team_with_existing_rules(self) -> None:
+        self.team.path_cleaning_filters = [{"regex": r"/x", "alias": "/y", "order": 0}]
+        self.team.save()
+        with (
+            patch.object(service, "count_distinct_pathnames") as mock_count,
+            patch.object(service, "call_llm_for_rules") as mock_llm,
+        ):
+            result = generate_suggestions_for_team(self.team, include_configured=False)
+
+        self.assertEqual(result.status, "skipped_configured")
+        mock_count.assert_not_called()
+        mock_llm.assert_not_called()
+        self.assertEqual(WebAnalyticsPathCleaningSuggestion.objects.for_team(self.team.id).count(), 0)
+
+    def test_skips_low_cardinality(self) -> None:
+        self.team.path_cleaning_filters = []
+        self.team.save()
+        with (
+            patch.object(service, "count_distinct_pathnames", return_value=3),
+            patch.object(service, "call_llm_for_rules") as mock_llm,
+        ):
+            result = generate_suggestions_for_team(self.team, min_distinct_paths=50)
+
+        self.assertEqual(result.status, "skipped_low_cardinality")
+        self.assertEqual(result.distinct_path_count, 3)
+        mock_llm.assert_not_called()
+
+    def test_generates_validates_and_stores(self) -> None:
+        self.team.path_cleaning_filters = []
+        self.team.save()
+        llm_response = SuggestedRulesResponse(
+            rules=[
+                SuggestedRule(regex=r"/users/\d+/profile", alias="/users/<id>/profile", reason="id"),
+                SuggestedRule(regex=r"/orders/\d+$", alias="/orders/<id>"),  # matches nothing -> dropped
+            ]
+        )
+        with (
+            patch.object(service, "count_distinct_pathnames", return_value=500),
+            patch.object(service, "sample_pathnames", return_value=SAMPLE_PATHS),
+            patch.object(service, "call_llm_for_rules", return_value=llm_response),
+        ):
+            result = generate_suggestions_for_team(self.team, store=True)
+
+        self.assertEqual(result.status, "generated")
+        self.assertEqual(len(result.rules), 1)  # invalid/no-match rule dropped by validation
+        row = WebAnalyticsPathCleaningSuggestion.objects.for_team(self.team.id).get(id=result.suggestion_id)
+        self.assertEqual(len(row.suggested_rules), 1)
+        self.assertEqual(row.distinct_path_count, 500)
+        self.assertEqual(row.status, WebAnalyticsPathCleaningSuggestion.Status.SUGGESTED)
+
+    def test_error_is_captured_not_raised(self) -> None:
+        self.team.path_cleaning_filters = []
+        self.team.save()
+        with patch.object(service, "count_distinct_pathnames", side_effect=RuntimeError("clickhouse down")):
+            result = generate_suggestions_for_team(self.team, store=True)
+
+        self.assertEqual(result.status, "error")
+        self.assertIn("clickhouse down", result.error or "")
+        self.assertEqual(WebAnalyticsPathCleaningSuggestion.objects.for_team(self.team.id).count(), 0)
