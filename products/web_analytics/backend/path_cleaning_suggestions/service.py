@@ -43,7 +43,8 @@ class AnnotatedRule:
 
 @dataclasses.dataclass
 class TeamSuggestionResult:
-    # status: generated | skipped_configured | skipped_low_cardinality | skipped_no_paths | error
+    # status: generated | skipped_inactive | skipped_configured | skipped_low_cardinality
+    #         | skipped_no_paths | error
     team_id: int
     status: str
     rules: list[AnnotatedRule]
@@ -55,8 +56,25 @@ class TeamSuggestionResult:
     suggestion_id: str | None = None
 
 
+DEFAULT_VISITED_WITHIN_DAYS = 30
+
+
 def _resolve_model() -> str:
     return getattr(settings, "WEB_ANALYTICS_PATH_CLEANING_SUGGESTIONS_MODEL", "claude-haiku-4-5")
+
+
+def has_recent_pageviews(team: Team, *, days: int) -> bool:
+    """True if the team sent any `$pageview` within the window — a cheap proxy for "actively using
+    web analytics". `LIMIT 1` lets ClickHouse early-terminate instead of counting the full window."""
+    query = f"""
+        SELECT 1
+        FROM events
+        WHERE event = '$pageview'
+          AND timestamp >= now() - toIntervalDay({int(days)})
+        LIMIT 1
+    """
+    response = execute_hogql_query(query=query, team=team, query_type="web_path_cleaning_recent_pageviews")
+    return bool(response.results)
 
 
 def sample_pathnames(team: Team, *, days: int, limit: int) -> list[tuple[str, int]]:
@@ -170,6 +188,7 @@ def generate_suggestions_for_team(
     limit: int = DEFAULT_SAMPLE_LIMIT,
     min_distinct_paths: int = DEFAULT_MIN_DISTINCT_PATHS,
     include_configured: bool = False,
+    visited_within_days: int | None = DEFAULT_VISITED_WITHIN_DAYS,
     store: bool = True,
 ) -> TeamSuggestionResult:
     existing_rules = team.path_cleaning_filters or []
@@ -188,6 +207,9 @@ def generate_suggestions_for_team(
             model=_resolve_model() if status in ("generated", "error") else "",
             error=error,
         )
+
+    if visited_within_days is not None and not has_recent_pageviews(team, days=visited_within_days):
+        return _result("skipped_inactive", [], 0, 0)
 
     if existing_rule_count > 0 and not include_configured:
         return _result("skipped_configured", [], 0, 0)

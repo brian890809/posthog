@@ -9,6 +9,7 @@ class PathCleaningSuggestionsInput:
     limit: int = 300
     min_distinct_paths: int = 50
     include_configured: bool = False
+    visited_within_days: int = 30  # only teams that opened Web analytics within this window
     max_concurrent: int = 4
 
 
@@ -19,6 +20,7 @@ class GenerateForTeamInput:
     limit: int
     min_distinct_paths: int
     include_configured: bool
+    visited_within_days: int | None
     store: bool
 
 

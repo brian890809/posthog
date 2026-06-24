@@ -534,6 +534,57 @@ export interface PatchedWebAnalyticsFilterPresetApi {
     readonly last_modified_by?: UserBasicApi
 }
 
+export interface PathCleaningExampleApi {
+    /** A real sampled path before this rule is applied. */
+    before: string
+    /** The same path after this rule's regex replacement. */
+    after: string
+}
+
+export interface SuggestedRuleApi {
+    /** re2 pattern matching the dynamic path segment. */
+    regex: string
+    /** Replacement with angle-bracket placeholders, e.g. /users/<id>. */
+    alias: string
+    /** Apply order; rules run sequentially, output feeds the next. */
+    order: number
+    /** Short rationale for the rule from the model. */
+    reason?: string
+    /** How many of the sampled paths this rule rewrites. */
+    match_count: number
+    /** Up to 3 before/after examples on the team's real paths. */
+    examples: PathCleaningExampleApi[]
+}
+
+export interface WebAnalyticsPathCleaningSuggestionApi {
+    readonly id: string
+    readonly created_at: string
+    /** suggested, applied, or dismissed. */
+    readonly status: string
+    readonly model: string
+    /** Validated path-cleaning rules proposed for this team. */
+    readonly suggested_rules: readonly SuggestedRuleApi[]
+    readonly sampled_path_count: number
+    readonly distinct_path_count: number
+    readonly existing_rule_count: number
+}
+
+export interface PaginatedWebAnalyticsPathCleaningSuggestionListApi {
+    count: number
+    /** @nullable */
+    next?: string | null
+    /** @nullable */
+    previous?: string | null
+    results: WebAnalyticsPathCleaningSuggestionApi[]
+}
+
+export interface ApplyPathCleaningSuggestionResponseApi {
+    /** Number of rules merged into the team's path_cleaning_filters. */
+    applied: number
+    /** The suggestion, now marked applied. */
+    suggestion: WebAnalyticsPathCleaningSuggestionApi
+}
+
 export type HeatmapScreenshotsContentRetrieveParams = {
     /**
      * Viewport width (CSS pixels) to fetch. Defaults to 1024. If no exact render exists for this width the closest available one is returned.
@@ -757,4 +808,15 @@ export type WebAnalyticsFilterPresetsListParams = {
      */
     offset?: number
     short_id?: string
+}
+
+export type WebAnalyticsPathCleaningSuggestionsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number
 }

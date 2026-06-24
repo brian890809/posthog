@@ -63,6 +63,7 @@ class WAPathCleaningSuggestionsWorkflow(PostHogWorkflow):
                         limit=input.limit,
                         min_distinct_paths=input.min_distinct_paths,
                         include_configured=input.include_configured,
+                        visited_within_days=input.visited_within_days,
                         store=not input.dry_run,
                     ),
                     start_to_close_timeout=timedelta(minutes=10),

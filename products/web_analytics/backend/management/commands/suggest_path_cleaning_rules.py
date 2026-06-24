@@ -26,6 +26,7 @@ from products.web_analytics.backend.path_cleaning_suggestions.service import (
     DEFAULT_MIN_DISTINCT_PATHS,
     DEFAULT_SAMPLE_DAYS,
     DEFAULT_SAMPLE_LIMIT,
+    DEFAULT_VISITED_WITHIN_DAYS,
     apply_suggestions_to_team,
     generate_suggestions_for_team,
 )
@@ -52,6 +53,17 @@ class Command(BaseCommand):
             help="Also process teams that already have path cleaning rules (default: skip them).",
         )
         parser.add_argument("--no-store", action="store_true", help="Don't persist suggestion rows.")
+        parser.add_argument(
+            "--visited-within-days",
+            type=int,
+            default=DEFAULT_VISITED_WITHIN_DAYS,
+            help="Only process teams that opened Web analytics within this many days.",
+        )
+        parser.add_argument(
+            "--ignore-visit-gate",
+            action="store_true",
+            help="Process teams even if they haven't recently opened Web analytics.",
+        )
         parser.add_argument(
             "--apply",
             action="store_true",
@@ -80,6 +92,7 @@ class Command(BaseCommand):
                 limit=options["limit"],
                 min_distinct_paths=options["min_distinct_paths"],
                 include_configured=options["include_configured"],
+                visited_within_days=None if options["ignore_visit_gate"] else options["visited_within_days"],
                 store=store,
             )
             counts[result.status] = counts.get(result.status, 0) + 1

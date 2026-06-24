@@ -9256,6 +9256,48 @@ export namespace Schemas {
       segments: TranscriptSegment[];
     }
 
+    export interface PathCleaningExample {
+      /** A real sampled path before this rule is applied. */
+      before: string;
+      /** The same path after this rule's regex replacement. */
+      after: string;
+    }
+
+    export interface SuggestedRule {
+      /** re2 pattern matching the dynamic path segment. */
+      regex: string;
+      /** Replacement with angle-bracket placeholders, e.g. /users/<id>. */
+      alias: string;
+      /** Apply order; rules run sequentially, output feeds the next. */
+      order: number;
+      /** Short rationale for the rule from the model. */
+      reason?: string;
+      /** How many of the sampled paths this rule rewrites. */
+      match_count: number;
+      /** Up to 3 before/after examples on the team's real paths. */
+      examples: PathCleaningExample[];
+    }
+
+    export interface WebAnalyticsPathCleaningSuggestion {
+      readonly id: string;
+      readonly created_at: string;
+      /** suggested, applied, or dismissed. */
+      readonly status: string;
+      readonly model: string;
+      /** Validated path-cleaning rules proposed for this team. */
+      readonly suggested_rules: readonly SuggestedRule[];
+      readonly sampled_path_count: number;
+      readonly distinct_path_count: number;
+      readonly existing_rule_count: number;
+    }
+
+    export interface ApplyPathCleaningSuggestionResponse {
+      /** Number of rules merged into the team's path_cleaning_filters. */
+      applied: number;
+      /** The suggestion, now marked applied. */
+      suggestion: WebAnalyticsPathCleaningSuggestion;
+    }
+
     export interface ApprovalPolicy {
       readonly id: string;
       /** @maxLength 128 */
@@ -33947,6 +33989,15 @@ export namespace Schemas {
       /** @nullable */
       previous?: string | null;
       results: WebAnalyticsFilterPreset[];
+    }
+
+    export interface PaginatedWebAnalyticsPathCleaningSuggestionList {
+      count: number;
+      /** @nullable */
+      next?: string | null;
+      /** @nullable */
+      previous?: string | null;
+      results: WebAnalyticsPathCleaningSuggestion[];
     }
 
     /**
@@ -63521,6 +63572,17 @@ export namespace Schemas {
      */
     offset?: number;
     short_id?: string;
+    };
+
+    export type WebAnalyticsPathCleaningSuggestionsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number;
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number;
     };
 
     export type WebExperimentsListParams = {

@@ -41,12 +41,26 @@ review). To hand-author or directly apply rules, use the `managing-path-cleaning
 
 `generate_suggestions_for_team` returns a status:
 
+- `skipped_inactive` — team sent no `$pageview` within `visited_within_days` (default 30); we only
+  suggest for teams actively using web analytics. Bypass with `--ignore-visit-gate`.
 - `skipped_configured` — team already has path cleaning rules (override with `include_configured`).
 - `skipped_low_cardinality` — fewer distinct paths than `min_distinct_paths` (default 50); cleaning
   adds no value, so we don't spend tokens.
 - `skipped_no_paths` — no pageviews in the window.
 - `generated` — rules produced (may be an empty list if paths are already clean).
 - `error` — sampling/LLM failed; captured per-team, never aborts the cohort sweep.
+
+## How users see and apply suggestions
+
+- **Settings banner**: `PathCleaningSuggestionsBanner` on `/settings/project#path_cleaning` shows the
+  latest `suggested` row with before/after previews; "Apply all" merges the rules, the close button
+  dismisses. Driven by `pathCleaningSuggestionsLogic`.
+- **Onboarding step**: `OnboardingWebAnalyticsPathCleaningStep` (stepKey `path_cleaning`) surfaces the
+  same banner during Web analytics onboarding.
+- **API** (`products/web_analytics/backend/api/web_analytics_path_cleaning_suggestions.py`):
+  `GET /api/projects/:id/web_analytics_path_cleaning_suggestions/` lists `suggested` rows;
+  `POST .../{id}/apply/` merges + marks applied; `POST .../{id}/dismiss/` marks dismissed. Frontend
+  uses the generated functions (`webAnalyticsPathCleaningSuggestions*`).
 
 ## Running it
 

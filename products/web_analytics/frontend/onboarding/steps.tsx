@@ -5,6 +5,7 @@ import { OnboardingInstallStep } from 'scenes/onboarding/legacy/sdks/OnboardingI
 import { WebAnalyticsSDKInstructions } from 'scenes/onboarding/legacy/sdks/web-analytics/WebAnalyticsSDKInstructions'
 import { INSTALL_DEDUP_KEYS, type ProductOnboardingProvider } from 'scenes/onboarding/legacy/types'
 import { OnboardingWebAnalyticsAuthorizedDomainsStep } from 'scenes/onboarding/legacy/web-analytics/OnboardingWebAnalyticsAuthorizedDomainsStep'
+import { OnboardingWebAnalyticsPathCleaningStep } from 'scenes/onboarding/legacy/web-analytics/OnboardingWebAnalyticsPathCleaningStep'
 import { urls } from 'scenes/urls'
 
 import { ProductKey } from '~/queries/schema/schema-general'
@@ -101,6 +102,13 @@ export const webAnalyticsOnboarding: ProductOnboardingProvider = {
                 role: ctx.role,
                 setupTaskId: SetupTaskId.AddAuthorizedDomain,
                 render: () => <OnboardingWebAnalyticsAuthorizedDomainsStep />,
+            },
+            {
+                id: `${OnboardingStepKey.PATH_CLEANING}:${ProductKey.WEB_ANALYTICS}`,
+                productKey: ProductKey.WEB_ANALYTICS,
+                stepKey: OnboardingStepKey.PATH_CLEANING,
+                role: ctx.role,
+                render: () => <OnboardingWebAnalyticsPathCleaningStep />,
             },
             {
                 id: `${OnboardingStepKey.PRODUCT_CONFIGURATION}:${ProductKey.WEB_ANALYTICS}`,

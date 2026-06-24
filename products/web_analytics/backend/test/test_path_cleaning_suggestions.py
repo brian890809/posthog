@@ -112,6 +112,18 @@ class TestApplySuggestionsToTeam(BaseTest):
 
 
 class TestGenerateSuggestionsForTeam(BaseTest):
+    def test_skips_inactive_team(self) -> None:
+        self.team.path_cleaning_filters = []
+        self.team.save()
+        with (
+            patch.object(service, "has_recent_pageviews", return_value=False),
+            patch.object(service, "count_distinct_pathnames") as mock_count,
+        ):
+            result = generate_suggestions_for_team(self.team, visited_within_days=30)
+
+        self.assertEqual(result.status, "skipped_inactive")
+        mock_count.assert_not_called()  # gate short-circuits before any further ClickHouse work
+
     def test_skips_team_with_existing_rules(self) -> None:
         self.team.path_cleaning_filters = [{"regex": r"/x", "alias": "/y", "order": 0}]
         self.team.save()
@@ -119,7 +131,7 @@ class TestGenerateSuggestionsForTeam(BaseTest):
             patch.object(service, "count_distinct_pathnames") as mock_count,
             patch.object(service, "call_llm_for_rules") as mock_llm,
         ):
-            result = generate_suggestions_for_team(self.team, include_configured=False)
+            result = generate_suggestions_for_team(self.team, include_configured=False, visited_within_days=None)
 
         self.assertEqual(result.status, "skipped_configured")
         mock_count.assert_not_called()
@@ -133,7 +145,7 @@ class TestGenerateSuggestionsForTeam(BaseTest):
             patch.object(service, "count_distinct_pathnames", return_value=3),
             patch.object(service, "call_llm_for_rules") as mock_llm,
         ):
-            result = generate_suggestions_for_team(self.team, min_distinct_paths=50)
+            result = generate_suggestions_for_team(self.team, min_distinct_paths=50, visited_within_days=None)
 
         self.assertEqual(result.status, "skipped_low_cardinality")
         self.assertEqual(result.distinct_path_count, 3)
@@ -149,11 +161,12 @@ class TestGenerateSuggestionsForTeam(BaseTest):
             ]
         )
         with (
+            patch.object(service, "has_recent_pageviews", return_value=True),  # exercises the gate's happy path
             patch.object(service, "count_distinct_pathnames", return_value=500),
             patch.object(service, "sample_pathnames", return_value=SAMPLE_PATHS),
             patch.object(service, "call_llm_for_rules", return_value=llm_response),
         ):
-            result = generate_suggestions_for_team(self.team, store=True)
+            result = generate_suggestions_for_team(self.team, store=True, visited_within_days=30)
 
         self.assertEqual(result.status, "generated")
         self.assertEqual(len(result.rules), 1)  # invalid/no-match rule dropped by validation
@@ -166,7 +179,7 @@ class TestGenerateSuggestionsForTeam(BaseTest):
         self.team.path_cleaning_filters = []
         self.team.save()
         with patch.object(service, "count_distinct_pathnames", side_effect=RuntimeError("clickhouse down")):
-            result = generate_suggestions_for_team(self.team, store=True)
+            result = generate_suggestions_for_team(self.team, store=True, visited_within_days=None)
 
         self.assertEqual(result.status, "error")
         self.assertIn("clickhouse down", result.error or "")
