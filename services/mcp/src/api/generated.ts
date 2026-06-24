@@ -23429,6 +23429,13 @@ export namespace Schemas {
       deleted: boolean;
     }
 
+    export interface GeneratePathCleaningSuggestionResponse {
+      /** generated, skipped_low_cardinality, skipped_no_paths, skipped_configured, or error. */
+      status: string;
+      /** The created suggestion when status is generated, else null. */
+      suggestion?: WebAnalyticsPathCleaningSuggestion | null;
+    }
+
     export type GenerateRequestStepsItem = { [key: string]: unknown };
 
     export interface GenerateRequest {

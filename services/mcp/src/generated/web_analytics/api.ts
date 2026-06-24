@@ -3,7 +3,7 @@
  * MCP service uses these Zod schemas for generated tool handlers.
  * To regenerate: hogli build:openapi
  *
- * PostHog API - MCP 8 enabled ops
+ * PostHog API - MCP 12 enabled ops
  * OpenAPI spec version: 1.0.0
  */
 import * as zod from 'zod'
@@ -402,4 +402,55 @@ export const WebAnalyticsWeeklyDigestQueryParams = /* @__PURE__ */ zod.object({
         .number()
         .default(webAnalyticsWeeklyDigestQueryDaysDefault)
         .describe('Lookback window in days (1–90). Defaults to 7.'),
+})
+
+export const WebAnalyticsPathCleaningSuggestionsListParams = /* @__PURE__ */ zod.object({
+    project_id: zod
+        .string()
+        .describe(
+            "Project ID of the project you're trying to access. To find the ID of the project, make a call to /api/projects/."
+        ),
+})
+
+export const WebAnalyticsPathCleaningSuggestionsListQueryParams = /* @__PURE__ */ zod.object({
+    limit: zod.number().optional().describe('Number of results to return per page.'),
+    offset: zod.number().optional().describe('The initial index from which to return the results.'),
+})
+
+/**
+ * Merges the suggestion's rules into the team's path_cleaning_filters (never overwrites existing rules) and marks the suggestion applied.
+ * @summary Apply a path-cleaning suggestion
+ */
+export const WebAnalyticsPathCleaningSuggestionsApplyParams = /* @__PURE__ */ zod.object({
+    id: zod.string().describe('A UUID string identifying this web analytics path cleaning suggestion.'),
+    project_id: zod
+        .string()
+        .describe(
+            "Project ID of the project you're trying to access. To find the ID of the project, make a call to /api/projects/."
+        ),
+})
+
+/**
+ * Marks the suggestion dismissed so it no longer surfaces.
+ * @summary Dismiss a path-cleaning suggestion
+ */
+export const WebAnalyticsPathCleaningSuggestionsDismissParams = /* @__PURE__ */ zod.object({
+    id: zod.string().describe('A UUID string identifying this web analytics path cleaning suggestion.'),
+    project_id: zod
+        .string()
+        .describe(
+            "Project ID of the project you're trying to access. To find the ID of the project, make a call to /api/projects/."
+        ),
+})
+
+/**
+ * Samples the team's recent paths, asks the LLM for cleaning rules, validates them against the real paths, and stores a suggestion. Runs even if the team already has rules. Returns the suggestion (or a skip status when there aren't enough paths to suggest from).
+ * @summary Generate path-cleaning suggestions on demand
+ */
+export const WebAnalyticsPathCleaningSuggestionsGenerateParams = /* @__PURE__ */ zod.object({
+    project_id: zod
+        .string()
+        .describe(
+            "Project ID of the project you're trying to access. To find the ID of the project, make a call to /api/projects/."
+        ),
 })

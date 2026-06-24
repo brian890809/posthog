@@ -13,6 +13,7 @@ import type {
     AcknowledgeCelebrationRequestApi,
     AcknowledgeCelebrationResponseApi,
     ApplyPathCleaningSuggestionResponseApi,
+    GeneratePathCleaningSuggestionResponseApi,
     HeatmapEventsResponseApi,
     HeatmapScreenshotResponseApi,
     HeatmapScreenshotsContentRetrieveParams,
@@ -574,6 +575,27 @@ export const webAnalyticsPathCleaningSuggestionsDismiss = async (
 ): Promise<WebAnalyticsPathCleaningSuggestionApi> => {
     return apiMutator<WebAnalyticsPathCleaningSuggestionApi>(
         getWebAnalyticsPathCleaningSuggestionsDismissUrl(projectId, id),
+        {
+            ...options,
+            method: 'POST',
+        }
+    )
+}
+
+export const getWebAnalyticsPathCleaningSuggestionsGenerateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/web_analytics_path_cleaning_suggestions/generate/`
+}
+
+/**
+ * Samples the team's recent paths, asks the LLM for cleaning rules, validates them against the real paths, and stores a suggestion. Runs even if the team already has rules. Returns the suggestion (or a skip status when there aren't enough paths to suggest from).
+ * @summary Generate path-cleaning suggestions on demand
+ */
+export const webAnalyticsPathCleaningSuggestionsGenerate = async (
+    projectId: string,
+    options?: RequestInit
+): Promise<GeneratePathCleaningSuggestionResponseApi> => {
+    return apiMutator<GeneratePathCleaningSuggestionResponseApi>(
+        getWebAnalyticsPathCleaningSuggestionsGenerateUrl(projectId),
         {
             ...options,
             method: 'POST',

@@ -1,10 +1,13 @@
 from posthog.test.base import APIBaseTest
+from unittest.mock import patch
 
 from rest_framework import status
 
 from posthog.models import Organization, Team
 
 from products.web_analytics.backend.models import WebAnalyticsPathCleaningSuggestion
+from products.web_analytics.backend.path_cleaning_suggestions import service
+from products.web_analytics.backend.path_cleaning_suggestions.prompts import SuggestedRule, SuggestedRulesResponse
 
 RULES = [
     {
@@ -69,6 +72,25 @@ class TestPathCleaningSuggestionsAPI(APIBaseTest):
         suggestion.refresh_from_db()
         self.assertEqual(suggestion.status, WebAnalyticsPathCleaningSuggestion.Status.DISMISSED)
         self.assertEqual(len(self.client.get(self._url()).json()["results"]), 0)
+
+    def test_generate_creates_and_returns_suggestion(self) -> None:
+        self.team.path_cleaning_filters = []
+        self.team.save()
+        llm_response = SuggestedRulesResponse(
+            rules=[SuggestedRule(regex=r"/users/\d+/profile", alias="/users/<id>/profile")]
+        )
+        with (
+            patch.object(service, "count_distinct_pathnames", return_value=500),
+            patch.object(service, "sample_pathnames", return_value=[("/users/1/profile", 5), ("/users/2/profile", 3)]),
+            patch.object(service, "call_llm_for_rules", return_value=llm_response),
+        ):
+            response = self.client.post(self._url("generate/"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        body = response.json()
+        self.assertEqual(body["status"], "generated")
+        self.assertEqual(len(body["suggestion"]["suggested_rules"]), 1)
+        self.assertEqual(body["suggestion"]["suggested_rules"][0]["alias"], "/users/<id>/profile")
 
     def test_cannot_apply_another_teams_suggestion(self) -> None:
         other_team = Team.objects.create(organization=Organization.objects.create(name="other"))

@@ -585,6 +585,13 @@ export interface ApplyPathCleaningSuggestionResponseApi {
     suggestion: WebAnalyticsPathCleaningSuggestionApi
 }
 
+export interface GeneratePathCleaningSuggestionResponseApi {
+    /** generated, skipped_low_cardinality, skipped_no_paths, skipped_configured, or error. */
+    status: string
+    /** The created suggestion when status is generated, else null. */
+    suggestion?: WebAnalyticsPathCleaningSuggestionApi | null
+}
+
 export type HeatmapScreenshotsContentRetrieveParams = {
     /**
      * Viewport width (CSS pixels) to fetch. Defaults to 1024. If no exact render exists for this width the closest available one is returned.

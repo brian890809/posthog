@@ -7836,6 +7836,62 @@
             "readOnlyHint": false
         }
     },
+    "web-analytics-path-cleaning-suggestions-apply": {
+        "description": "Apply a suggested set of path-cleaning rules by its `id`, merging them into the project's path cleaning configuration. Existing rules are never overwritten — only new rules are appended — and the suggestion is marked applied. Returns how many rules were added. Applying changes historical numbers in every Web analytics and Paths chart that has cleaning enabled, so confirm with the user before calling this.",
+        "category": "Web analytics",
+        "feature": "web_analytics",
+        "summary": "Apply a path-cleaning suggestion",
+        "title": "Apply a path-cleaning suggestion",
+        "required_scopes": ["web_analytics:write"],
+        "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+        }
+    },
+    "web-analytics-path-cleaning-suggestions-dismiss": {
+        "description": "Dismiss a suggested set of path-cleaning rules by its `id` so it no longer surfaces in the list or the in-app banner. Use when the user isn't interested in the suggestion. Does not change any existing rules.",
+        "category": "Web analytics",
+        "feature": "web_analytics",
+        "summary": "Dismiss a path-cleaning suggestion",
+        "title": "Dismiss a path-cleaning suggestion",
+        "required_scopes": ["web_analytics:write"],
+        "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+        }
+    },
+    "web-analytics-path-cleaning-suggestions-generate": {
+        "description": "Analyze the project's recent URL paths and generate suggested path-cleaning rules on demand. Samples the most-viewed paths, asks the model for `{regex, alias}` rules, and validates each against the real paths (dropping any that don't match), then stores the result. Returns `status` ('generated' with a `suggestion`, or a skip reason like 'skipped_no_paths' / 'skipped_low_cardinality' when there isn't enough to suggest from). Use when the user asks to clean up or normalize their paths and no suggestion exists yet. This only proposes rules — apply them with `web-analytics-path-cleaning-suggestions-apply`; nothing changes until then.",
+        "category": "Web analytics",
+        "feature": "web_analytics",
+        "summary": "Generate path-cleaning suggestions",
+        "title": "Generate path-cleaning suggestions",
+        "required_scopes": ["web_analytics:write"],
+        "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+        }
+    },
+    "web-analytics-path-cleaning-suggestions-list": {
+        "description": "List the AI-suggested path-cleaning rule sets waiting for review on this project. Path cleaning collapses dynamic URLs (`/users/123`, `/users/456`) into one readable template (`/users/<id>`) so Web analytics and Paths breakdowns aren't fragmented across near-identical URLs. Each suggestion carries its rules — `regex`, `alias`, `match_count` (how many sampled paths it rewrites), and before/after `examples`. If the list is empty, call `web-analytics-path-cleaning-suggestions-generate` to produce fresh suggestions. Apply a set with `web-analytics-path-cleaning-suggestions-apply`.",
+        "category": "Web analytics",
+        "feature": "web_analytics",
+        "summary": "List path-cleaning suggestions",
+        "title": "List path-cleaning suggestions",
+        "required_scopes": ["web_analytics:read"],
+        "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+        }
+    },
     "web-analytics-weekly-digest": {
         "description": "Summarizes a project's web analytics over a lookback window (default 7 days): unique visitors, pageviews, sessions, bounce rate, and average session duration with period-over-period comparisons, plus the top 5 pages, top 5 traffic sources, and goal conversions. Accepts optional `days` (1–90, default 7) and `compare` (bool, default true) query params — pass `days=30` to summarize the last month, or `compare=false` to skip the period-over-period comparison for a faster response. Use this to answer questions like \"how are my web analytics?\", \"how did the site do last week?\", or \"what's my traffic looking like this month?\".",
         "category": "Web analytics",

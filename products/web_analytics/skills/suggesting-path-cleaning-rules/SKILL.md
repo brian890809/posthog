@@ -59,8 +59,13 @@ review). To hand-author or directly apply rules, use the `managing-path-cleaning
   same banner during Web analytics onboarding.
 - **API** (`products/web_analytics/backend/api/web_analytics_path_cleaning_suggestions.py`):
   `GET /api/projects/:id/web_analytics_path_cleaning_suggestions/` lists `suggested` rows;
-  `POST .../{id}/apply/` merges + marks applied; `POST .../{id}/dismiss/` marks dismissed. Frontend
-  uses the generated functions (`webAnalyticsPathCleaningSuggestions*`).
+  `POST .../generate/` produces fresh suggestions on demand; `POST .../{id}/apply/` merges + marks
+  applied; `POST .../{id}/dismiss/` marks dismissed. Frontend uses the generated functions
+  (`webAnalyticsPathCleaningSuggestions*`).
+- **PostHog AI (Max)**: the same operations are exposed as MCP tools in
+  `products/web_analytics/mcp/tools.yaml` (`web-analytics-path-cleaning-suggestions-{list,generate,apply,dismiss}`),
+  so a user can ask Max to suggest path-cleaning rules and apply them conversationally. Apply is
+  flagged as changing historical chart numbers, so Max confirms before applying.
 
 ## Running it
 
