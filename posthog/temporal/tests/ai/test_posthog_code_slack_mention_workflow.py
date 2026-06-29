@@ -58,6 +58,44 @@ async def test_general_task_routing_skips_repository_connector() -> None:
 
 
 @pytest.mark.asyncio
+async def test_untagged_attachment_followup_skips_text_classifier() -> None:
+    workflow = posthog_code_slack_mention.PostHogCodeSlackMentionWorkflow()
+    calls: list[str] = []
+    inputs = PostHogCodeSlackMentionWorkflowInputs(
+        event={
+            "channel": "C123",
+            "ts": "1234.5679",
+            "user": "U_ALICE",
+            "text": "",
+            "files": [{"id": "F123", "name": "debug.log"}],
+        },
+        integration_id=1,
+        slack_team_id="T_SLACK",
+        user_id=42,
+        untagged_followup=True,
+    )
+
+    async def fake_execute_activity(activity_fn, *args):
+        calls.append(activity_fn.__name__)
+        if activity_fn is posthog_code_slack_mention.enforce_posthog_code_billing_quota_activity:
+            return False
+        if activity_fn is posthog_code_slack_mention.forward_posthog_code_followup_activity:
+            return True
+        if activity_fn is posthog_code_slack_mention.classify_untagged_followup_activity:
+            raise AssertionError("attachment-only follow-ups should not require text classification")
+
+        raise AssertionError(f"unexpected activity: {activity_fn.__name__}")
+
+    with patch.object(posthog_code_slack_mention, "_execute_posthog_code_activity", side_effect=fake_execute_activity):
+        await workflow.run(inputs)
+
+    assert calls == [
+        "enforce_posthog_code_billing_quota_activity",
+        "forward_posthog_code_followup_activity",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_coding_task_routing_runs_repository_connector_cascade() -> None:
     workflow = posthog_code_slack_mention.PostHogCodeSlackMentionWorkflow()
     calls: list[tuple[str, tuple[object, ...]]] = []
