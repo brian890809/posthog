@@ -1342,6 +1342,32 @@ def _post_slack_update_for_pr(run: TaskRun) -> None:
         logger.exception("task_run_slack_update_for_pr_failed for run %s", run.id)
 
 
+def _post_linear_update_for_pr(run: TaskRun) -> None:
+    pr_url = (run.output or {}).get("pr_url") if isinstance(run.output, dict) else None
+    if not pr_url:
+        return
+
+    from products.tasks.backend.linear_agent.sync import (  # noqa: PLC0415 — keep linear_agent off the api import path
+        dispatch_linear_update_for_run,
+    )
+
+    try:
+        dispatch_linear_update_for_run(run, kind="pr_opened")
+    except Exception:
+        logger.exception("task_run_linear_update_for_pr_failed for run %s", run.id)
+
+
+def _post_linear_update_for_failure(run: TaskRun, error_message: str | None) -> None:
+    from products.tasks.backend.linear_agent.sync import (  # noqa: PLC0415 — keep linear_agent off the api import path
+        dispatch_linear_update_for_run,
+    )
+
+    try:
+        dispatch_linear_update_for_run(run, kind="failed", error_message=error_message)
+    except Exception:
+        logger.exception("task_run_linear_update_for_failure_failed for run %s", run.id)
+
+
 def update_task_run(
     run_id: str | UUID, task_id: str | UUID, team_id: int, *, validated_data: dict
 ) -> contracts.TaskRunDetailDTO | None:
@@ -1426,6 +1452,7 @@ def update_task_run(
     if new_status in _TERMINAL_TASK_RUN_STATUSES and old_status != new_status:
         if new_status == TaskRun.Status.FAILED:
             observe_agent_turn_failed(run)
+            _post_linear_update_for_failure(run, validated_data.get("error_message"))
         signal_workflow_completion(run.id, new_status, validated_data.get("error_message"))
         if new_status == TaskRun.Status.CANCELLED:
             from products.tasks.backend.push_dispatcher import (  # noqa: PLC0415 — keep push deps off the api import path
@@ -1440,6 +1467,7 @@ def update_task_run(
     new_pr_url = (run.output or {}).get("pr_url") if isinstance(run.output, dict) else None
     if new_pr_url and new_pr_url != old_pr_url:
         _post_slack_update_for_pr(run)
+        _post_linear_update_for_pr(run)
 
     return _task_run_detail_to_dto(run)
 
@@ -1474,6 +1502,7 @@ def set_task_run_output(
         signal_workflow_completion(run.id, TaskRun.Status.COMPLETED, None)
     run.publish_stream_state_event()
     _post_slack_update_for_pr(run)
+    _post_linear_update_for_pr(run)
     return _task_run_detail_to_dto(run)
 
 

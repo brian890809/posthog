@@ -5364,6 +5364,7 @@ export const INTEGRATION_KINDS = [
     'email',
     'twilio',
     'linear',
+    'linear-agent',
     'github',
     'gitlab',
     'meta-ads',

@@ -27437,6 +27437,7 @@ export namespace Schemas {
      * * `intercom` - Intercom
      * * `jira` - Jira
      * * `linear` - Linear
+     * * `linear-agent` - Linear Agent
      * * `linkedin-ads` - Linkedin Ads
      * * `meta-ads` - Meta Ads
      * * `pinterest-ads` - Pinterest Ads
@@ -27481,6 +27482,7 @@ export namespace Schemas {
       Intercom: 'intercom',
       Jira: 'jira',
       Linear: 'linear',
+      LinearAgent: 'linear-agent',
       LinkedinAds: 'linkedin-ads',
       MetaAds: 'meta-ads',
       PinterestAds: 'pinterest-ads',
@@ -27525,6 +27527,7 @@ export namespace Schemas {
        * * `intercom` - Intercom
        * * `jira` - Jira
        * * `linear` - Linear
+       * * `linear-agent` - Linear Agent
        * * `linkedin-ads` - Linkedin Ads
        * * `meta-ads` - Meta Ads
        * * `pinterest-ads` - Pinterest Ads
@@ -30760,6 +30763,7 @@ export namespace Schemas {
      * * `signals_scout` - Signals Scout
      * * `support_reply` - Support Reply
      * * `hogdesk` - HogDesk
+     * * `linear` - Linear
      */
     export type OriginProductEnum = typeof OriginProductEnum[keyof typeof OriginProductEnum];
 
@@ -30778,6 +30782,7 @@ export namespace Schemas {
       SignalsScout: 'signals_scout',
       SupportReply: 'support_reply',
       Hogdesk: 'hogdesk',
+      Linear: 'linear',
     } as const;
 
     /**
@@ -41565,7 +41570,8 @@ export namespace Schemas {
        * * `signal_report` - Signal Report
        * * `signals_scout` - Signals Scout
        * * `support_reply` - Support Reply
-       * * `hogdesk` - HogDesk */
+       * * `hogdesk` - HogDesk
+       * * `linear` - Linear */
       origin_product?: OriginProductEnum;
       /**
          * Target GitHub repository in `organization/repo` format (e.g. `posthog/posthog-js`).
@@ -52243,7 +52249,8 @@ export namespace Schemas {
        * * `signal_report` - Signal Report
        * * `signals_scout` - Signals Scout
        * * `support_reply` - Support Reply
-       * * `hogdesk` - HogDesk */
+       * * `hogdesk` - HogDesk
+       * * `linear` - Linear */
       origin_product?: OriginProductEnum;
       /**
          * Target GitHub repository in `organization/repo` format (e.g. `posthog/posthog-js`).
@@ -57467,6 +57474,7 @@ export namespace Schemas {
      * * `intercom` - Intercom
      * * `jira` - Jira
      * * `linear` - Linear
+     * * `linear-agent` - Linear Agent
      * * `linkedin-ads` - Linkedin Ads
      * * `meta-ads` - Meta Ads
      * * `pinterest-ads` - Pinterest Ads
@@ -57522,6 +57530,7 @@ export namespace Schemas {
       Intercom: 'intercom',
       Jira: 'jira',
       Linear: 'linear',
+      LinearAgent: 'linear-agent',
       LinkedinAds: 'linkedin-ads',
       MetaAds: 'meta-ads',
       PinterestAds: 'pinterest-ads',
@@ -64055,6 +64064,7 @@ export namespace Schemas {
      * * `intercom` - Intercom
      * * `jira` - Jira
      * * `linear` - Linear
+     * * `linear-agent` - Linear Agent
      * * `linkedin-ads` - Linkedin Ads
      * * `meta-ads` - Meta Ads
      * * `pinterest-ads` - Pinterest Ads
@@ -64110,6 +64120,7 @@ export namespace Schemas {
       Intercom: 'intercom',
       Jira: 'jira',
       Linear: 'linear',
+      LinearAgent: 'linear-agent',
       LinkedinAds: 'linkedin-ads',
       MetaAds: 'meta-ads',
       PinterestAds: 'pinterest-ads',
