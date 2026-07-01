@@ -143,7 +143,10 @@ def apply_saved_query_frequency_target(saved_query: "DataWarehouseSavedQuery") -
     """
     interval = saved_query.sync_frequency_interval
     for node in Node.objects.filter(saved_query=saved_query).select_related("dag", "dag__team"):
-        if interval is not None:
+        if interval is None:
+            # "never": the node opts out of declaring freshness (ride-downstream).
+            set_frequency_target(node, None)
+        else:
             graph = build_frequency_graph(node.dag)
             validate_frequency_target(
                 node_id=str(node.id),
