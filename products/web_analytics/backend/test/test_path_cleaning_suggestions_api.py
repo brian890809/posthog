@@ -1,9 +1,12 @@
 from posthog.test.base import APIBaseTest
 from unittest.mock import patch
 
+from parameterized import parameterized
 from rest_framework import status
 
 from posthog.models import Organization, Team
+from posthog.models.personal_api_key import PersonalAPIKey, hash_key_value
+from posthog.models.utils import generate_random_token_personal
 
 from products.web_analytics.backend.models import WebAnalyticsPathCleaningSuggestion
 from products.web_analytics.backend.path_cleaning_suggestions import service
@@ -64,6 +67,31 @@ class TestPathCleaningSuggestionsAPI(APIBaseTest):
         regexes = [f["regex"] for f in self.team.path_cleaning_filters]
         self.assertIn(r"/keep", regexes)
         self.assertIn(r"/users/\d+/profile", regexes)
+
+    @parameterized.expand(
+        [
+            ("write_scope_allows", ["web_analytics:write"], status.HTTP_200_OK),
+            ("read_scope_forbidden", ["web_analytics:read"], status.HTTP_403_FORBIDDEN),
+        ]
+    )
+    def test_apply_requires_write_scope_for_token_auth(self, _name: str, scopes: list[str], expected: int) -> None:
+        # The write actions must declare required_scopes, or personal-API-key / OAuth token access
+        # (how the MCP server authenticates) is rejected outright. Session auth bypasses scope
+        # checks, so we drop the session and authenticate with a scoped key.
+        self.team.path_cleaning_filters = []
+        self.team.save()
+        suggestion = self._make_suggestion(self.team)
+        value = generate_random_token_personal()
+        PersonalAPIKey.objects.create(
+            user=self.user,
+            label="mcp",
+            secure_value=hash_key_value(value),
+            scopes=scopes,
+            scoped_teams=[self.team.id],
+        )
+        self.client.logout()
+        response = self.client.post(self._url(f"{suggestion.id}/apply/"), headers={"authorization": f"Bearer {value}"})
+        self.assertEqual(response.status_code, expected)
 
     def test_dismiss_marks_dismissed_and_drops_from_list(self) -> None:
         suggestion = self._make_suggestion(self.team)

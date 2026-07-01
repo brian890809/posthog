@@ -89,7 +89,7 @@ class WebAnalyticsPathCleaningSuggestionViewSet(TeamAndOrgViewSetMixin, mixins.L
         request=None,
         responses={200: GeneratePathCleaningSuggestionResponseSerializer},
     )
-    @action(detail=False, methods=["post"])
+    @action(detail=False, methods=["post"], required_scopes=["web_analytics:write"])
     def generate(self, request: Request, **kwargs: Any) -> Response:
         result = generate_suggestions_for_team(self.team, visited_within_days=None, include_configured=True, store=True)
         suggestion = None
@@ -114,7 +114,7 @@ class WebAnalyticsPathCleaningSuggestionViewSet(TeamAndOrgViewSetMixin, mixins.L
         request=None,
         responses={200: ApplyPathCleaningSuggestionResponseSerializer},
     )
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["post"], required_scopes=["web_analytics:write"])
     def apply(self, request: Request, **kwargs: Any) -> Response:
         suggestion = self.get_object()
         rules = [AnnotatedRule(**rule) for rule in suggestion.suggested_rules]
@@ -130,7 +130,7 @@ class WebAnalyticsPathCleaningSuggestionViewSet(TeamAndOrgViewSetMixin, mixins.L
         request=None,
         responses={200: WebAnalyticsPathCleaningSuggestionSerializer},
     )
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["post"], required_scopes=["web_analytics:write"])
     def dismiss(self, request: Request, **kwargs: Any) -> Response:
         suggestion = self.get_object()
         suggestion.status = WebAnalyticsPathCleaningSuggestion.Status.DISMISSED
