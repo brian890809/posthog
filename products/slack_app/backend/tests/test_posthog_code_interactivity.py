@@ -347,7 +347,7 @@ class TestRepoPickerOptions(TestCase):
         }
 
     @patch("products.slack_app.backend.api.requests.post")
-    @patch("products.slack_app.backend.api.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.signal_task_run_permission_response", return_value=True)
     @patch("products.slack_app.backend.api.resolve_slack_user")
     @patch("products.slack_app.backend.api.SlackIntegration.slack_config")
     def test_permission_approve_sends_default_option(
@@ -366,7 +366,9 @@ class TestRepoPickerOptions(TestCase):
 
         assert response.status_code == 200
         mock_signal_permission_response.assert_called_once_with(
-            task_run.workflow_id,
+            task_run.id,
+            task_run.task_id,
+            task_run.team_id,
             request_id="perm-1",
             option_id="allow",
             actor_user_id=self.user.id,
@@ -382,7 +384,7 @@ class TestRepoPickerOptions(TestCase):
         assert cache.get(_picker_context_cache_key(token)) is None
 
     @patch("products.slack_app.backend.api.requests.post")
-    @patch("products.slack_app.backend.api.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.signal_task_run_permission_response", return_value=True)
     @patch("products.slack_app.backend.api.resolve_slack_user")
     @patch("products.slack_app.backend.api.SlackIntegration.slack_config")
     def test_permission_deny_sends_reject_option(
@@ -402,7 +404,7 @@ class TestRepoPickerOptions(TestCase):
         assert response.status_code == 200
         mock_signal_permission_response.assert_called_once()
         signal_args = mock_signal_permission_response.call_args
-        assert signal_args.args == (task_run.workflow_id,)
+        assert signal_args.args == (task_run.id, task_run.task_id, task_run.team_id)
         assert signal_args.kwargs["request_id"] == "perm-1"
         assert signal_args.kwargs["option_id"] == "reject"
         assert signal_args.kwargs["actor_user_id"] == self.user.id
@@ -415,7 +417,7 @@ class TestRepoPickerOptions(TestCase):
         assert "find another path" in mock_requests_post.call_args.kwargs["json"]["text"]
 
     @patch("products.slack_app.backend.api.requests.post")
-    @patch("products.slack_app.backend.api.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.signal_task_run_permission_response")
     @patch("products.slack_app.backend.api.resolve_slack_user")
     @patch("products.slack_app.backend.api.SlackIntegration.slack_config")
     def test_permission_deny_keeps_context_when_workflow_signal_fails(
@@ -427,7 +429,7 @@ class TestRepoPickerOptions(TestCase):
     ):
         mock_config.return_value = {"SLACK_APP_SIGNING_SECRET": self.signing_secret}
         mock_resolve_slack_user.return_value = SimpleNamespace(user=self.user, slack_email=self.user.email)
-        mock_signal_permission_response.side_effect = RuntimeError("workflow not found")
+        mock_signal_permission_response.return_value = False
         task_run = self._create_permission_run()
         token = self._cache_permission_context(task_run)
 
@@ -439,7 +441,7 @@ class TestRepoPickerOptions(TestCase):
         assert cache.get(_picker_context_cache_key(token)) is not None
 
     @patch("products.slack_app.backend.api.requests.post")
-    @patch("products.slack_app.backend.api.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.signal_task_run_permission_response")
     @patch("products.slack_app.backend.api.SlackIntegration.slack_config")
     def test_permission_wrong_user_gets_ephemeral_feedback(
         self,
@@ -460,7 +462,7 @@ class TestRepoPickerOptions(TestCase):
         mock_requests_post.assert_called_once()
         assert mock_requests_post.call_args.kwargs["json"]["response_type"] == "ephemeral"
 
-    @patch("products.slack_app.backend.api.signal_task_permission_response")
+    @patch("products.tasks.backend.facade.api.signal_task_run_permission_response")
     @patch("products.slack_app.backend.api.requests.post")
     @patch("products.slack_app.backend.api.SlackIntegration.slack_config")
     def test_permission_config_select_persists_user_setting(

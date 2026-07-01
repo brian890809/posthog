@@ -19,7 +19,9 @@ from posthog.models.integration import SlackIntegration
 logger = structlog.get_logger(__name__)
 
 SLACK_PERMISSION_CONTEXT_KIND = "task_permission_request"
-SLACK_PERMISSION_CONTEXT_TTL_SECONDS = 15 * 60
+# Must comfortably outlive the run's inactivity window (1h for user-origin runs)
+# so a late click gets a "run already finished" reply instead of dead buttons.
+SLACK_PERMISSION_CONTEXT_TTL_SECONDS = 24 * 60 * 60
 SLACK_PERMISSION_PROMPT_DEDUPE_SECONDS = SLACK_PERMISSION_CONTEXT_TTL_SECONDS
 SLACK_PERMISSION_PROMPT_INFLIGHT_SECONDS = 30
 SLACK_CARD_BODY_MAX_LENGTH = 200
@@ -265,7 +267,13 @@ def _shell_command_is_read_only(command: str) -> bool:
 
 def _task_run_uses_full_auto(task_run: Any) -> bool:
     state = getattr(task_run, "state", None)
-    return isinstance(state, dict) and state.get("slack_autonomy_tier") == "full_auto"
+    if not isinstance(state, dict):
+        return False
+    # Customer-facing (externally shared) channels always keep a human in the loop
+    # for destructive actions, no matter the user's autonomy tier.
+    if state.get("slack_customer_facing_approval_required"):
+        return False
+    return state.get("slack_autonomy_tier") == "full_auto"
 
 
 def _permission_request_should_auto_allow(task_run: Any, permission_request: dict[str, Any]) -> bool:
@@ -328,8 +336,8 @@ def _auto_approve_slack_permission_request(task_run: Any, permission_request: di
     from products.slack_app.backend.api import (
         resolve_slack_user,  # noqa: PLC0415 - avoids circular interactivity imports
     )
-    from products.tasks.backend.temporal.client import (
-        signal_task_permission_response,  # noqa: PLC0415 - avoids hot-path Temporal import
+    from products.tasks.backend.facade import (
+        api as tasks_facade,  # noqa: PLC0415 - keeps the tasks facade off the hot event path
     )
 
     target_slack_user_id = mapping.latest_actor_slack_user_id or mapping.mentioning_slack_user_id
@@ -354,26 +362,28 @@ def _auto_approve_slack_permission_request(task_run: Any, permission_request: di
         )
         return False
 
+    # Auto-approvals go straight to the sandbox: they fire on every allowed tool
+    # call, so routing them through the workflow would bloat Temporal history and
+    # add latency for no durability benefit (a lost allow just re-prompts).
     broker_reason = _auto_allow_broker_reason(task_run)
-    try:
-        signal_task_permission_response(
-            task_run.workflow_id,
-            request_id=request_id,
-            option_id=option_id,
-            actor_user_id=actor_context.user.id,
-            actor_slack_user_id=target_slack_user_id,
-            broker_reason=broker_reason,
-        )
-    except Exception:
+    actor = actor_context.user
+    auth_token = tasks_facade.create_sandbox_connection_token(
+        run_id, user_id=actor.id, distinct_id=actor.distinct_id or f"user_{actor.id}"
+    )
+    result = tasks_facade.send_permission_response(
+        run_id, request_id=request_id, option_id=option_id, auth_token=auth_token
+    )
+    if not result.success:
         logger.warning(
-            "slack_permission_auto_allow_signal_failed",
+            "slack_permission_auto_allow_failed",
             run_id=run_id,
             request_id=request_id,
             option_id=option_id,
             integration_id=getattr(mapping, "integration_id", None),
             channel=getattr(mapping, "channel", None),
-            actor_user_id=actor_context.user.id,
-            exc_info=True,
+            actor_user_id=actor.id,
+            status_code=result.status_code,
+            error=result.error,
         )
         return False
 

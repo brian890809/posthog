@@ -258,12 +258,15 @@ def get_task_run_actor_user(
 
 
 def get_task_run_credential_user(task: Task, state: dict[str, Any] | None = None) -> User | None:
-    """Return the user whose credentials may be minted for this run."""
-    return get_task_run_actor_user(
-        task,
-        state,
-        allow_task_creator_fallback=not is_slack_interaction_state(state),
-    )
+    """Return the user whose credentials may be minted for this run.
+
+    Slack runs fail closed when their recorded actor can't be validated, but runs
+    started before actor tracking existed carry no ``slack_actor_user_id`` at all —
+    those grandfather to the task creator so in-flight runs survive the rollout.
+    """
+    state = state or {}
+    allow_fallback = not is_slack_interaction_state(state) or "slack_actor_user_id" not in state
+    return get_task_run_actor_user(task, state, allow_task_creator_fallback=allow_fallback)
 
 
 def get_actor_distinct_id(actor: User) -> str:
