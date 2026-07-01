@@ -160,7 +160,7 @@ class DataWarehouseSavedQuery(CreatedMetaFields, UUIDTModel, UpdatedMetaFields, 
         else:
             DataWarehouseModelPath.objects.update_from_saved_query(self)
 
-    def schedule_materialization(self, unpause: bool = False):
+    def schedule_materialization(self, unpause: bool = False, reconcile: bool = True):
         """
         It will schedule the saved query workflow to run at the configured frequency.
         If unpause is True, it will unpause the saved query workflow if it already exists.
@@ -192,7 +192,7 @@ class DataWarehouseSavedQuery(CreatedMetaFields, UUIDTModel, UpdatedMetaFields, 
                 if tiered_schedules_enabled(self.team):
                     # Tiered v2: the interval is the user-facing mirror of the node's freshness
                     # target — write it through and reconcile instead of clearing it.
-                    apply_saved_query_frequency_target(self)
+                    apply_saved_query_frequency_target(self, reconcile=reconcile)
                     return
                 # Single-schedule v2: clear any lingering frequency that would cause a v1
                 # schedule to be recreated.

@@ -38,7 +38,6 @@ from posthog.ph_client import feature_enabled_or_false
 from posthog.temporal.common.client import async_connect
 from posthog.temporal.common.schedule import a_create_schedule, a_delete_schedule, a_update_schedule
 from posthog.temporal.common.search_attributes import POSTHOG_DAG_ID_KEY
-from posthog.temporal.data_modeling.workflows.execute_dag import ExecuteDAGInputs
 
 from products.data_modeling.backend.logic.cohort_scheduling import (
     ScheduleReconcilePlan,
@@ -133,13 +132,14 @@ def _warn_on_invalid_targets(dag: DAG) -> None:
         )
 
 
-def apply_saved_query_frequency_target(saved_query: "DataWarehouseSavedQuery") -> None:
+def apply_saved_query_frequency_target(saved_query: "DataWarehouseSavedQuery", reconcile: bool = True) -> None:
     """Write a saved query's `sync_frequency_interval` through to its DAG node target(s).
 
     On tiered v2 the node target is authoritative and the saved query's interval is its
     user-facing mirror, so every interval write must land on both. Validates against the
     node's [floor, ceiling] bounds (raising for the caller to surface) before writing,
-    then queues a reconcile of each affected DAG.
+    then queues a reconcile of each affected DAG (skippable for callers batching many
+    writes into one reconcile).
     """
     interval = saved_query.sync_frequency_interval
     for node in Node.objects.filter(saved_query=saved_query).select_related("dag", "dag__team"):
@@ -156,7 +156,8 @@ def apply_saved_query_frequency_target(saved_query: "DataWarehouseSavedQuery") -
                 source_intervals=graph.source_intervals,
             )
             set_frequency_target(node, interval)
-        maybe_reconcile_dag(node.dag)
+        if reconcile:
+            maybe_reconcile_dag(node.dag)
 
 
 def reconcile_dag_schedules(dag: DAG, *, allow_unschedule: bool = False, require_tiered: bool = False) -> None:
@@ -343,6 +344,10 @@ async def _list_execute_dag_schedule_ids(temporal: Client, dag_id: str) -> set[s
 def _build_tier_schedule(
     dag_id: str, team_id: int, team_timezone: str, interval: timedelta, node_ids: Iterable[str]
 ) -> Schedule:
+    from posthog.temporal.data_modeling.workflows.execute_dag import (  # noqa: PLC0415 — the workflows package imports this product's models back; importing it lazily keeps this module importable from models code and temporal off django.setup()
+        ExecuteDAGInputs,
+    )
+
     inputs = ExecuteDAGInputs(team_id=team_id, dag_id=dag_id, node_ids=sorted(node_ids), duckgres_only=False)
     spec = build_schedule_spec(entity_id=uuid.UUID(dag_id), interval=interval, team_timezone=team_timezone)
     return Schedule(
