@@ -1,5 +1,7 @@
 from typing import Any
 
+from django.db import transaction
+
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, serializers, viewsets
 from rest_framework.decorators import action
@@ -118,9 +120,12 @@ class WebAnalyticsPathCleaningSuggestionViewSet(TeamAndOrgViewSetMixin, mixins.L
     def apply(self, request: Request, **kwargs: Any) -> Response:
         suggestion = self.get_object()
         rules = [AnnotatedRule(**rule) for rule in suggestion.suggested_rules]
-        added = apply_suggestions_to_team(self.team, rules)
-        suggestion.status = WebAnalyticsPathCleaningSuggestion.Status.APPLIED
-        suggestion.save(update_fields=["status", "updated_at"])
+        # Merge the rules and flip the status together — if the status write failed on its own the
+        # banner would reappear and offer "Apply all" again for rules already applied.
+        with transaction.atomic():
+            added = apply_suggestions_to_team(self.team, rules)
+            suggestion.status = WebAnalyticsPathCleaningSuggestion.Status.APPLIED
+            suggestion.save(update_fields=["status", "updated_at"])
         return Response({"applied": added, "suggestion": WebAnalyticsPathCleaningSuggestionSerializer(suggestion).data})
 
     @extend_schema(

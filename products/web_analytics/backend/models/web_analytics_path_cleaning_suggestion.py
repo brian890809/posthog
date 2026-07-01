@@ -24,7 +24,6 @@ class WebAnalyticsPathCleaningSuggestion(TeamScopedRootMixin, UUIDModel):
     sampled_path_count = models.IntegerField(default=0)
     distinct_path_count = models.IntegerField(default=0)
     existing_rule_count = models.IntegerField(default=0)
-    error = models.TextField(null=True, blank=True)
 
     class Meta:
         db_table = "posthog_webanalyticspathcleaningsuggestion"

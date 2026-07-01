@@ -23,6 +23,7 @@ export const pathCleaningSuggestionsLogic = kea<pathCleaningSuggestionsLogicType
     actions({
         applySuggestion: (id: string) => ({ id }),
         dismissSuggestion: (id: string) => ({ id }),
+        unhandleSuggestion: (id: string) => ({ id }),
     }),
     loaders(({ values }) => ({
         suggestions: [
@@ -45,6 +46,7 @@ export const pathCleaningSuggestionsLogic = kea<pathCleaningSuggestionsLogicType
             {
                 applySuggestion: (state, { id }) => [...state, id],
                 dismissSuggestion: (state, { id }) => [...state, id],
+                unhandleSuggestion: (state, { id }) => state.filter((handledId) => handledId !== id),
             },
         ],
     }),
@@ -60,16 +62,27 @@ export const pathCleaningSuggestionsLogic = kea<pathCleaningSuggestionsLogicType
             if (!values.currentTeamId) {
                 return
             }
-            const result = await webAnalyticsPathCleaningSuggestionsApply(String(values.currentTeamId), id)
-            lemonToast.success(`Applied ${result.applied} path cleaning rule${result.applied === 1 ? '' : 's'}`)
-            // Refresh the team so the rules table reflects the merged path_cleaning_filters.
-            actions.loadCurrentTeam()
+            try {
+                const result = await webAnalyticsPathCleaningSuggestionsApply(String(values.currentTeamId), id)
+                lemonToast.success(`Applied ${result.applied} path cleaning rule${result.applied === 1 ? '' : 's'}`)
+                // Refresh the team so the rules table reflects the merged path_cleaning_filters.
+                actions.loadCurrentTeam()
+            } catch {
+                // Roll back the optimistic hide and tell the user, so nothing is silently lost.
+                actions.unhandleSuggestion(id)
+                lemonToast.error('Could not apply the path cleaning suggestions. Please try again.')
+            }
         },
         dismissSuggestion: async ({ id }) => {
             if (!values.currentTeamId) {
                 return
             }
-            await webAnalyticsPathCleaningSuggestionsDismiss(String(values.currentTeamId), id)
+            try {
+                await webAnalyticsPathCleaningSuggestionsDismiss(String(values.currentTeamId), id)
+            } catch {
+                actions.unhandleSuggestion(id)
+                lemonToast.error('Could not dismiss the suggestion. Please try again.')
+            }
         },
     })),
     afterMount(({ actions }) => {

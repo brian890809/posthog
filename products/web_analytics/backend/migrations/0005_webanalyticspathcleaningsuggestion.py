@@ -44,7 +44,6 @@ class Migration(migrations.Migration):
                 ("sampled_path_count", models.IntegerField(default=0)),
                 ("distinct_path_count", models.IntegerField(default=0)),
                 ("existing_rule_count", models.IntegerField(default=0)),
-                ("error", models.TextField(blank=True, null=True)),
                 (
                     "team",
                     models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to="posthog.team"),

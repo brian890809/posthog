@@ -157,14 +157,22 @@ def validate_and_annotate_rules(
 
         examples: list[dict[str, str]] = []
         match_count = 0
+        alias_valid = True
         for path in paths:
-            cleaned = compiled.sub(rule.alias, path)
+            try:
+                cleaned = compiled.sub(rule.alias, path)
+            except re2.error:
+                # LLM produced an alias with a backreference the regex can't satisfy (e.g. `\1` with
+                # no capture group). Drop the rule rather than let it fail the whole team's run.
+                logger.info("path_cleaning_suggestion_invalid_alias", regex=rule.regex, alias=rule.alias)
+                alias_valid = False
+                break
             if cleaned != path:
                 match_count += 1
                 if len(examples) < MAX_EXAMPLES_PER_RULE:
                     examples.append({"before": path, "after": cleaned})
 
-        if match_count == 0:
+        if not alias_valid or match_count == 0:
             continue
 
         annotated.append(

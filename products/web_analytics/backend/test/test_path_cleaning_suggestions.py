@@ -38,6 +38,8 @@ class TestValidateAndAnnotateRules(BaseTest):
             ("matches_nothing", r"/orders/\d+$", "/orders/<id>"),  # no /orders path in sample
             ("empty_regex", "", "/x"),
             ("empty_alias", r"/users/\d+", ""),
+            # alias backreference with no capture group -> re2 raises on sub; must be dropped, not crash
+            ("alias_backreference_no_group", r"/users/\d+/profile", r"/users/\1"),
         ]
     )
     def test_drops_unusable_rules(self, _name: str, regex: str, alias: str) -> None:
