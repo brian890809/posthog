@@ -263,7 +263,15 @@ def _shell_command_is_read_only(command: str) -> bool:
     )
 
 
-def _permission_request_should_auto_allow(permission_request: dict[str, Any]) -> bool:
+def _task_run_uses_full_auto(task_run: Any) -> bool:
+    state = getattr(task_run, "state", None)
+    return isinstance(state, dict) and state.get("slack_autonomy_tier") == "full_auto"
+
+
+def _permission_request_should_auto_allow(task_run: Any, permission_request: dict[str, Any]) -> bool:
+    if _task_run_uses_full_auto(task_run):
+        return True
+
     tool_call = permission_request["tool_call"]
     tool_name = _tool_call_name(tool_call)
     if tool_name is None:
@@ -290,6 +298,10 @@ def _default_allow_option_id(options: list[dict[str, str]]) -> str | None:
     return allow_options[0]["optionId"] if allow_options else None
 
 
+def _auto_allow_broker_reason(task_run: Any) -> str:
+    return "slack_full_auto" if _task_run_uses_full_auto(task_run) else "destructive_policy_auto_allow"
+
+
 def _slack_mapping_for_task_run(task_run: Any) -> Any:
     from products.slack_app.backend.models import SlackThreadTaskMapping
 
@@ -313,31 +325,55 @@ def _auto_approve_slack_permission_request(task_run: Any, permission_request: di
         logger.info("slack_permission_auto_allow_no_allow_option", run_id=run_id, request_id=request_id)
         return False
 
-    from products.tasks.backend.logic.services.agent_command import send_agent_command
-    from products.tasks.backend.logic.services.connection_token import create_sandbox_connection_token
-
-    auth_token = None
-    created_by = getattr(getattr(task_run, "task", None), "created_by", None)
-    if created_by and getattr(created_by, "id", None):
-        distinct_id = created_by.distinct_id or f"user_{created_by.id}"
-        auth_token = create_sandbox_connection_token(task_run, user_id=created_by.id, distinct_id=distinct_id)
-
-    result = send_agent_command(
-        task_run,
-        method="permission_response",
-        params={"requestId": request_id, "optionId": option_id},
-        auth_token=auth_token,
+    from products.slack_app.backend.api import (
+        resolve_slack_user,  # noqa: PLC0415 - avoids circular interactivity imports
     )
-    if not result.success:
+    from products.tasks.backend.temporal.client import (
+        signal_task_permission_response,  # noqa: PLC0415 - avoids hot-path Temporal import
+    )
+
+    target_slack_user_id = mapping.latest_actor_slack_user_id or mapping.mentioning_slack_user_id
+    if not target_slack_user_id:
+        logger.info("slack_permission_auto_allow_no_target_user", run_id=run_id, request_id=request_id)
+        return False
+
+    actor_context = resolve_slack_user(
+        SlackIntegration(mapping.integration),
+        mapping.integration,
+        target_slack_user_id,
+        mapping.channel,
+        mapping.thread_ts,
+        post_feedback=False,
+    )
+    if actor_context is None:
+        logger.info(
+            "slack_permission_auto_allow_actor_unresolved",
+            run_id=run_id,
+            request_id=request_id,
+            slack_user_id=target_slack_user_id,
+        )
+        return False
+
+    broker_reason = _auto_allow_broker_reason(task_run)
+    try:
+        signal_task_permission_response(
+            task_run.workflow_id,
+            request_id=request_id,
+            option_id=option_id,
+            actor_user_id=actor_context.user.id,
+            actor_slack_user_id=target_slack_user_id,
+            broker_reason=broker_reason,
+        )
+    except Exception:
         logger.warning(
-            "slack_permission_auto_allow_failed",
+            "slack_permission_auto_allow_signal_failed",
             run_id=run_id,
             request_id=request_id,
             option_id=option_id,
             integration_id=getattr(mapping, "integration_id", None),
             channel=getattr(mapping, "channel", None),
-            status_code=result.status_code,
-            error=result.error,
+            actor_user_id=actor_context.user.id,
+            exc_info=True,
         )
         return False
 
@@ -349,6 +385,8 @@ def _auto_approve_slack_permission_request(task_run: Any, permission_request: di
         option_id=option_id,
         integration_id=getattr(mapping, "integration_id", None),
         channel=getattr(mapping, "channel", None),
+        actor_user_id=actor_context.user.id,
+        broker_reason=broker_reason,
     )
     return True
 
@@ -484,7 +522,7 @@ def handle_slack_permission_request_for_task_run(task_run: Any, event_data: dict
         logger.info("slack_permission_prompt_no_mapping", run_id=run_id, request_id=request_id)
         return
 
-    if _permission_request_should_auto_allow(permission_request) and _auto_approve_slack_permission_request(
+    if _permission_request_should_auto_allow(task_run, permission_request) and _auto_approve_slack_permission_request(
         task_run, permission_request, mapping
     ):
         return
@@ -538,6 +576,7 @@ def post_slack_permission_request_for_task_run(
             return
 
         context_token = uuid.uuid4().hex
+        tool_label, tool_detail = _extract_tool_summary(permission_request["tool_call"])
         cache.set(
             _interactivity_context_cache_key(context_token),
             {
@@ -553,12 +592,13 @@ def post_slack_permission_request_for_task_run(
                 "default_option_id": default_option["optionId"],
                 "reject_option_id": reject_option_id,
                 "options": options,
+                "tool_label": tool_label,
+                "tool_detail": tool_detail,
                 "created_at": int(time.time()),
             },
             timeout=SLACK_PERMISSION_CONTEXT_TTL_SECONDS,
         )
 
-        tool_label, tool_detail = _extract_tool_summary(permission_request["tool_call"])
         text = f"<@{target_slack_user_id}> the agent needs permission to continue: *{tool_label}*"
         current_autonomy_tier = _initial_autonomy_tier(task_run, SlackAutonomyTier.ASK_BEFORE_WRITE)
         autonomy_tier_options = [
