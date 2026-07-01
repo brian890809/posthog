@@ -1125,7 +1125,7 @@ describe.each(['postgres-v2' as const, 'postgres' as const])('Workflows E2E (%s)
             mockPersonRepo.fetchPersonsByDistinctIds.mockResolvedValue([
                 personRow('new-uuid', { email: 'test@posthog.com', plan: 'enterprise' }),
             ])
-            const merges = await matcher._parsePersonMergeBatch([mergeMessage('old-uuid', 'new-uuid')])
+            const merges = matcher._parsePersonMergeBatch([mergeMessage('old-uuid', 'new-uuid')])
             await matcher.processMergeBatch(merges)
 
             await waitForExpect(() => {
@@ -1152,7 +1152,7 @@ describe.each(['postgres-v2' as const, 'postgres' as const])('Workflows E2E (%s)
             mockPersonRepo.fetchPersonsByDistinctIds.mockResolvedValue([
                 personRow('new-uuid', { email: 'test@posthog.com' }),
             ])
-            const merges = await matcher._parsePersonMergeBatch([mergeMessage('old-uuid', 'new-uuid')])
+            const merges = matcher._parsePersonMergeBatch([mergeMessage('old-uuid', 'new-uuid')])
             await matcher.processMergeBatch(merges)
 
             await waitForExpect(async () => {
@@ -1160,7 +1160,8 @@ describe.each(['postgres-v2' as const, 'postgres' as const])('Workflows E2E (%s)
                 const parked = jobs.find((j: any) => j.status === 'available' && new Date(j.scheduled) > new Date())
                 expect(parked).toBeDefined()
                 expect(parked.person_id).toBe('new-uuid')
-                expect(JSON.parse(parked.state.toString()).state.personId).toBe('new-uuid')
+                const parkedState = parseJSON((parked.state as Buffer).toString('utf-8')) as any
+                expect(parkedState.state.personId).toBe('new-uuid')
             }, 10000)
             expect(mockFetch).not.toHaveBeenCalled()
         })

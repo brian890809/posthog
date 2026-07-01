@@ -1393,7 +1393,7 @@ describe('CdpHogflowSubscriptionMatcherConsumer', () => {
             expect(update).toBeDefined()
             // params: [ids, person_ids, states]. person_id column moves to the survivor.
             expect(update!.params[1]).toEqual(['new-uuid'])
-            const newState = JSON.parse((update!.params[2][0] as Buffer).toString())
+            const newState = parseJSON((update!.params[2][0] as Buffer).toString('utf-8')) as any
             expect(newState.state.personId).toBe('new-uuid')
             // Cleared so the worker's ensuing re-check advance is not miscounted as a poll-only advance.
             expect(newState.state.currentAction.pollReparked).toBe(false)

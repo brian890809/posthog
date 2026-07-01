@@ -691,8 +691,9 @@ export class CdpHogflowSubscriptionMatcherConsumer<
         return events
     }
 
-    @instrumented('cdpHogflowSubscriptionMatcher.parsePersonMergeMessages')
-    public async _parsePersonMergeBatch(messages: Message[]): Promise<PersonMerge[]> {
+    // Synchronous (no getTeam/globals conversion needed — a merge only carries old/new ids), so unlike
+    // the other parsers this isn't async or @instrumented.
+    public _parsePersonMergeBatch(messages: Message[]): PersonMerge[] {
         const merges: PersonMerge[] = []
         for (const message of messages) {
             try {
@@ -833,9 +834,11 @@ export class CdpHogflowSubscriptionMatcherConsumer<
                 })
             }),
             this.personMergeKafkaConsumer.connect(async (messages) => {
-                return await instrumentFn('cdpHogflowSubscriptionMatcher.handlePersonMergeBatch', async () => {
-                    return { backgroundTask: this.processMergeBatch(await this._parsePersonMergeBatch(messages)) }
-                })
+                // Parsing merges is synchronous (no getTeam), so wrap the result in a resolved promise to
+                // satisfy instrumentFn's promise-returning callback without a no-op async body.
+                return await instrumentFn('cdpHogflowSubscriptionMatcher.handlePersonMergeBatch', () =>
+                    Promise.resolve({ backgroundTask: this.processMergeBatch(this._parsePersonMergeBatch(messages)) })
+                )
             }),
         ])
     }
