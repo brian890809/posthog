@@ -54,9 +54,16 @@ from products.data_modeling.backend.logic.freshness import (
     compute_effective_cadences,
     find_invalid_targets,
     frequency_target_bounds,
+    validate_frequency_target,
 )
-from products.data_modeling.backend.logic.node_frequency import FrequencyGraph, build_frequency_graph, seed_targets
+from products.data_modeling.backend.logic.node_frequency import (
+    FrequencyGraph,
+    build_frequency_graph,
+    seed_targets,
+    set_frequency_target,
+)
 from products.data_modeling.backend.models.dag import DAG
+from products.data_modeling.backend.models.node import Node
 from products.data_modeling.backend.schedule import (
     DATA_MODELING_EXECUTE_DAG_WORKFLOW,
     build_schedule_spec,
@@ -65,6 +72,8 @@ from products.data_modeling.backend.schedule import (
 
 if TYPE_CHECKING:
     from posthog.models.team import Team
+
+    from products.data_modeling.backend.models.datawarehouse_saved_query import DataWarehouseSavedQuery
 
 logger = structlog.get_logger(__name__)
 
@@ -122,6 +131,29 @@ def _warn_on_invalid_targets(dag: DAG) -> None:
             floor=str(invalid.floor),
             ceiling=str(invalid.ceiling),
         )
+
+
+def apply_saved_query_frequency_target(saved_query: "DataWarehouseSavedQuery") -> None:
+    """Write a saved query's `sync_frequency_interval` through to its DAG node target(s).
+
+    On tiered v2 the node target is authoritative and the saved query's interval is its
+    user-facing mirror, so every interval write must land on both. Validates against the
+    node's [floor, ceiling] bounds (raising for the caller to surface) before writing,
+    then queues a reconcile of each affected DAG.
+    """
+    interval = saved_query.sync_frequency_interval
+    for node in Node.objects.filter(saved_query=saved_query).select_related("dag", "dag__team"):
+        if interval is not None:
+            graph = build_frequency_graph(node.dag)
+            validate_frequency_target(
+                node_id=str(node.id),
+                target=interval,
+                edges=graph.edges,
+                targets=graph.targets,
+                source_intervals=graph.source_intervals,
+            )
+            set_frequency_target(node, interval)
+        maybe_reconcile_dag(node.dag)
 
 
 def reconcile_dag_schedules(dag: DAG, *, allow_unschedule: bool = False, require_tiered: bool = False) -> None:
