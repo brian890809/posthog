@@ -3,7 +3,12 @@ import { Pool } from 'pg'
 import { Counter, Histogram } from 'prom-client'
 
 import { HogFlow, HogFlowAction } from '~/cdp/schema/hogflow'
-import { KAFKA_CDP_INTERNAL_EVENTS, KAFKA_EVENTS_JSON, KAFKA_PERSON } from '~/common/config/kafka-topics'
+import {
+    KAFKA_CDP_INTERNAL_EVENTS,
+    KAFKA_EVENTS_JSON,
+    KAFKA_PERSON,
+    KAFKA_PERSON_MERGE_EVENTS,
+} from '~/common/config/kafka-topics'
 import { KafkaConsumerInterface, RdKafkaConsumerConfig, createKafkaConsumer } from '~/common/kafka/consumer'
 import { InternalCaptureEvent } from '~/common/services/internal-capture'
 import { instrumentFn, instrumented } from '~/common/tracing/tracing-utils'
@@ -11,6 +16,7 @@ import { parseJSON } from '~/common/utils/json-parse'
 import { logger } from '~/common/utils/logger'
 import { captureException } from '~/common/utils/posthog'
 import { UUIDT } from '~/common/utils/utils'
+import { PersonMergeKafkaEvent } from '~/ingestion/common/persons/person-merge-event'
 
 import { ClickHousePerson, HealthCheckResult, PluginsServerConfig, RawClickHouseEvent, Team } from '../../types'
 import { CdpInternalEventSchema } from '../schema'
@@ -53,6 +59,14 @@ const counterHogflowMatcherConversionsCounted = new Counter({
     help: 'Event-based conversions counted by the matcher (deduped to once per run via conversionCounted).',
 })
 
+// A person merge deletes the source person, so a wait parked on that (now-deleted) person id would
+// never be woken by the survivor's property changes. We re-point such waits at the survivor and wake
+// them for an immediate re-check; this counts the re-keyed jobs.
+const counterHogflowMatcherJobsRekeyedOnMerge = new Counter({
+    name: 'cdp_hogflow_matcher_jobs_rekeyed_on_merge',
+    help: 'Parked wait_until_condition jobs re-keyed from the merged-away person to the survivor (and woken for re-check) after a person merge.',
+})
+
 // Latency of the cyclotron lookup for parked jobs. Watch this for cyclotron-node
 // read pressure as the wait-until-event feature ramps.
 const histogramHogflowMatcherFindParkedJobs = new Histogram({
@@ -80,6 +94,13 @@ type ParkedCandidate = {
     actionId: string | null
     distinctId: string | null
     personId: string | null
+}
+
+// A committed person merge: the wait's old person id (deleted) and the survivor it should follow.
+type PersonMerge = {
+    teamId: number
+    oldPersonId: string
+    newPersonId: string
 }
 
 // A parked job the matcher needs to act on this batch: either resume it (stepMatched, or a
@@ -124,6 +145,10 @@ export class CdpHogflowSubscriptionMatcherConsumer<
     // analytics events topic. (Email engagement events, by contrast, flow through capture to
     // clickhouse_events_json and are already covered by the events stream.)
     private internalEventsKafkaConsumer: KafkaConsumerInterface
+    // person_merge_events carries committed P_old -> P_new merges. A wait parked on P_old can never be
+    // woken by the survivor's clickhouse_person updates (they're keyed on P_new, and P_old is
+    // tombstoned), so we re-key those waits onto P_new and wake them for a re-check.
+    private personMergeKafkaConsumer: KafkaConsumerInterface
     private cyclotronPool: Pool
 
     constructor(config: TConfig, deps: CdpConsumerBaseDeps) {
@@ -146,6 +171,13 @@ export class CdpHogflowSubscriptionMatcherConsumer<
             {
                 groupId: 'cdp-hogflow-subscription-matcher-internal-events-consumer',
                 topic: KAFKA_CDP_INTERNAL_EVENTS,
+            },
+            startAtLatest
+        )
+        this.personMergeKafkaConsumer = createKafkaConsumer(
+            {
+                groupId: 'cdp-hogflow-subscription-matcher-person-merge-consumer',
+                topic: KAFKA_PERSON_MERGE_EVENTS,
             },
             startAtLatest
         )
@@ -659,6 +691,120 @@ export class CdpHogflowSubscriptionMatcherConsumer<
         return events
     }
 
+    @instrumented('cdpHogflowSubscriptionMatcher.parsePersonMergeMessages')
+    public async _parsePersonMergeBatch(messages: Message[]): Promise<PersonMerge[]> {
+        const merges: PersonMerge[] = []
+        for (const message of messages) {
+            try {
+                const data = parseJSON(message.value!.toString()) as PersonMergeKafkaEvent
+                // A self-merge (or a malformed message missing either id) has nothing to re-key.
+                if (!data.old_person_uuid || !data.new_person_uuid || data.old_person_uuid === data.new_person_uuid) {
+                    continue
+                }
+                merges.push({
+                    teamId: data.team_id,
+                    oldPersonId: data.old_person_uuid,
+                    newPersonId: data.new_person_uuid,
+                })
+            } catch (e) {
+                logger.error('Error parsing person merge message', e)
+                counterParseError.labels({ error: e.message }).inc()
+            }
+        }
+        return merges
+    }
+
+    // Re-key parked wait_until_condition jobs from a merged-away person onto the survivor and wake them
+    // for an immediate re-check. Without this a wait parked on P_old strands until the poll/max_wait,
+    // because the survivor's property changes arrive keyed on P_new and P_old is tombstoned.
+    public async processMergeBatch(merges: PersonMerge[]): Promise<void> {
+        if (merges.length === 0) {
+            return
+        }
+
+        // Only flows with a wait_until_condition step can have a parked wait to re-key. Scope the
+        // function_id filter to them so the cyclotron query stays index-friendly and skips merges for
+        // teams with no such flow.
+        const teamIds = [...new Set(merges.map((m) => m.teamId))]
+        const hogFlowsByTeam = await this.hogFlowManager.getHogFlowsForTeams(teamIds)
+        const hogflows: Record<string, HogFlow> = {}
+        for (const flows of Object.values(hogFlowsByTeam)) {
+            for (const flow of flows) {
+                if (flow.actions.some((a: HogFlowAction) => a.type === 'wait_until_condition')) {
+                    hogflows[flow.id] = flow
+                }
+            }
+        }
+        const functionIds = Object.keys(hogflows)
+        if (functionIds.length === 0) {
+            return
+        }
+
+        const newPersonByKey = new Map(merges.map((m) => [`${m.teamId}:${m.oldPersonId}`, m.newPersonId]))
+        const oldTeamIds = merges.map((m) => m.teamId)
+        const oldPersonIds = merges.map((m) => m.oldPersonId)
+
+        const client = await this.cyclotronPool.connect()
+        try {
+            await client.query('BEGIN')
+            // Lock the parked jobs for the merged-away persons. ORDER BY id keeps lock order consistent
+            // with processMatchedJobs so concurrent merge/match batches can't deadlock.
+            const rows = await client.query(
+                `SELECT id, team_id, person_id, function_id, action_id, state
+                 FROM cyclotron_jobs
+                 WHERE status = 'available'
+                   AND function_id = ANY($3::uuid[])
+                   AND (team_id, person_id) IN (SELECT * FROM unnest($1::int[], $2::text[]))
+                 ORDER BY id
+                 FOR UPDATE`,
+                [oldTeamIds, oldPersonIds, functionIds]
+            )
+
+            const updates: { id: string; personId: string; state: Buffer }[] = []
+            for (const row of rows.rows) {
+                // Only re-key jobs currently parked ON a wait_until_condition step. A job of the same
+                // flow could be parked in a delay; waking that would pull its schedule forward.
+                const action = row.action_id
+                    ? hogflows[row.function_id]?.actions.find((a: HogFlowAction) => a.id === row.action_id)
+                    : undefined
+                if (action?.type !== 'wait_until_condition') {
+                    continue
+                }
+                const newPersonId = newPersonByKey.get(`${row.team_id}:${row.person_id}`)
+                if (!newPersonId || !row.state) {
+                    continue
+                }
+                const newState = rewriteMergedState(row.state, newPersonId, row.id)
+                if (!newState) {
+                    continue
+                }
+                updates.push({ id: row.id, personId: newPersonId, state: newState })
+            }
+
+            if (updates.length > 0) {
+                // scheduled = NOW() wakes the job so the worker re-resolves the (now survivor) person and
+                // re-evaluates the condition — matched branch if satisfied, otherwise a normal re-park now
+                // correctly keyed on the survivor.
+                const result = await client.query(
+                    `UPDATE cyclotron_jobs cj
+                     SET person_id = u.person_id, state = u.state, scheduled = NOW()
+                     FROM (
+                         SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS person_id, unnest($3::bytea[]) AS state
+                     ) u
+                     WHERE cj.id = u.id AND cj.status = 'available'`,
+                    [updates.map((u) => u.id), updates.map((u) => u.personId), updates.map((u) => u.state)]
+                )
+                counterHogflowMatcherJobsRekeyedOnMerge.inc(result.rowCount ?? 0)
+            }
+            await client.query('COMMIT')
+        } catch (err) {
+            await client.query('ROLLBACK').catch(() => {})
+            throw err
+        } finally {
+            client.release()
+        }
+    }
+
     public override async start(): Promise<void> {
         await super.start()
         // Surface failures to each kafka consumer so the offset doesn't advance past a batch we
@@ -686,6 +832,11 @@ export class CdpHogflowSubscriptionMatcherConsumer<
                     }
                 })
             }),
+            this.personMergeKafkaConsumer.connect(async (messages) => {
+                return await instrumentFn('cdpHogflowSubscriptionMatcher.handlePersonMergeBatch', async () => {
+                    return { backgroundTask: this.processMergeBatch(await this._parsePersonMergeBatch(messages)) }
+                })
+            }),
         ])
     }
 
@@ -695,6 +846,7 @@ export class CdpHogflowSubscriptionMatcherConsumer<
             this.kafkaConsumer.disconnect(),
             this.personKafkaConsumer.disconnect(),
             this.internalEventsKafkaConsumer.disconnect(),
+            this.personMergeKafkaConsumer.disconnect(),
         ])
         await this.cyclotronPool.end()
         await super.stop()
@@ -707,6 +859,7 @@ export class CdpHogflowSubscriptionMatcherConsumer<
             this.kafkaConsumer.isHealthy(),
             this.personKafkaConsumer.isHealthy(),
             this.internalEventsKafkaConsumer.isHealthy(),
+            this.personMergeKafkaConsumer.isHealthy(),
         ]
         return results.find((r) => r.status !== 'ok') ?? results[0]
     }
@@ -889,6 +1042,27 @@ async function runBytecode(
         captureException(err, { extra: { ...context } })
         counterHogflowMatcherBytecodeError.inc()
         return false
+    }
+}
+
+// Rewrite a parked wait's state for a merge re-key: point personId at the survivor (so the worker's
+// re-resolution — which falls back to state.personId when the job has no distinct_id — lands on the
+// survivor), and clear pollReparked so the ensuing worker re-check is attributed to the matcher, not
+// the poll. Without clearing it, the merge-driven advance would inflate cdp_hogflow_wait_poll_only_advance
+// (the signal gating poll removal), because the job set pollReparked=true when it first parked.
+// Returns the new state buffer, or null if the state can't be parsed (leave the row untouched).
+function rewriteMergedState(stateBuffer: Buffer, newPersonId: string, jobId: string): Buffer | null {
+    try {
+        const parsed = parseJSON(stateBuffer.toString('utf-8'))
+        const state = { ...parsed.state, personId: newPersonId }
+        if (state.currentAction) {
+            state.currentAction = { ...state.currentAction, pollReparked: false }
+        }
+        parsed.state = state
+        return Buffer.from(JSON.stringify(parsed))
+    } catch (err) {
+        logger.warn('Failed to parse state during merge re-key', { jobId, err })
+        return null
     }
 }
 

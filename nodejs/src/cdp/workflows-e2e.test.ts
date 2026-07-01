@@ -1076,6 +1076,95 @@ describe.each(['postgres-v2' as const, 'postgres' as const])('Workflows E2E (%s)
             expect(mockFetch).toHaveBeenCalledWith('https://example.com/condition-matched', expect.anything())
         })
 
+        // A parked wait is keyed on the person id resolved at park time. When that person is merged away,
+        // its clickhouse_person updates stop (it is tombstoned) and the survivor's updates arrive under a
+        // different id — so without merge handling the wait strands until the poll/max_wait. These two
+        // tests cover the merge re-key: the wait must follow the survivor.
+        const personRow = (uuid: string, properties: Record<string, any>): any => ({
+            id: uuid,
+            uuid,
+            team_id: team.id,
+            properties,
+            properties_last_updated_at: {},
+            properties_last_operation: null,
+            created_at: DateTime.utc(),
+            version: 1,
+            is_identified: true,
+            is_user_id: null,
+            last_seen_at: null,
+            distinct_id: 'distinct_id',
+        })
+        const mergeMessage = (oldUuid: string, newUuid: string): any => ({
+            value: Buffer.from(
+                JSON.stringify({
+                    team_id: team.id,
+                    old_person_uuid: oldUuid,
+                    new_person_uuid: newUuid,
+                    merged_at_ms: 1700000000000,
+                    schema_version: 1,
+                })
+            ),
+        })
+
+        it('wakes a wait parked on a merged-away person by re-keying it onto the survivor', async () => {
+            await createWaitUntilWorkflow({
+                condition: { filters: personPropertyConditionFilters('plan', 'enterprise') },
+                max_wait_duration: '5m',
+            })
+            // Park keyed on the anonymous person ('old-uuid'), which has no `plan` — the wait parks on entry.
+            mockPersonRepo.fetchPersonsByDistinctIds.mockResolvedValue([
+                personRow('old-uuid', { email: 'test@posthog.com' }),
+            ])
+            await triggerWorkflow(createGlobals())
+            await expectParked()
+
+            // The anon person merges into an identified survivor ('new-uuid') that already satisfies the
+            // condition. Post-merge the anon distinct_id resolves to the survivor, so the worker's re-check
+            // (triggered by the merge wake) sees plan=enterprise and takes the matched branch — no poll,
+            // no max_wait deadline.
+            mockPersonRepo.fetchPersonsByDistinctIds.mockResolvedValue([
+                personRow('new-uuid', { email: 'test@posthog.com', plan: 'enterprise' }),
+            ])
+            const merges = await matcher._parsePersonMergeBatch([mergeMessage('old-uuid', 'new-uuid')])
+            await matcher.processMergeBatch(merges)
+
+            await waitForExpect(() => {
+                expect(mockFetch).toHaveBeenCalledTimes(1)
+            }, 10000)
+            expect(mockFetch).toHaveBeenCalledWith('https://example.com/condition-matched', expect.anything())
+        })
+
+        it('re-keys the parked wait onto the survivor (person_id + state.personId) when the merge does not yet satisfy it', async () => {
+            await createWaitUntilWorkflow({
+                condition: { filters: personPropertyConditionFilters('plan', 'enterprise') },
+                max_wait_duration: '5m',
+            })
+            mockPersonRepo.fetchPersonsByDistinctIds.mockResolvedValue([
+                personRow('old-uuid', { email: 'test@posthog.com' }),
+            ])
+            await triggerWorkflow(createGlobals())
+            await expectParked()
+
+            // Survivor does not satisfy the condition yet, so the woken job re-checks and re-parks — now
+            // keyed on the survivor. This isolates the re-key: person_id AND the persisted state.personId
+            // must both move to the survivor (without the state rewrite, state.personId would stay 'old-uuid'),
+            // so future survivor updates can wake it and a distinct_id-less re-resolution follows the survivor.
+            mockPersonRepo.fetchPersonsByDistinctIds.mockResolvedValue([
+                personRow('new-uuid', { email: 'test@posthog.com' }),
+            ])
+            const merges = await matcher._parsePersonMergeBatch([mergeMessage('old-uuid', 'new-uuid')])
+            await matcher.processMergeBatch(merges)
+
+            await waitForExpect(async () => {
+                const jobs = await queryCyclotronJobs()
+                const parked = jobs.find((j: any) => j.status === 'available' && new Date(j.scheduled) > new Date())
+                expect(parked).toBeDefined()
+                expect(parked.person_id).toBe('new-uuid')
+                expect(JSON.parse(parked.state.toString()).state.personId).toBe('new-uuid')
+            }, 10000)
+            expect(mockFetch).not.toHaveBeenCalled()
+        })
+
         it('wakes a parked wait from a cdp_internal_events signal with no analytics event', async () => {
             // CDP-generated signals (e.g. $insight_alert_firing) arrive on cdp_internal_events and never
             // hit the analytics events topic. The matcher parses them via _parseInternalEventsBatch and

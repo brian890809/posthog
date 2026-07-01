@@ -109,6 +109,7 @@ class MatcherUnderTest extends CdpHogflowSubscriptionMatcherConsumer {
     public calls: QueryCall[] = []
     public findRows: MockRow[] = []
     public wakeRows: MockRow[] = []
+    public mergeRows: any[] = []
     public updateRowCount = 0
 
     constructor() {
@@ -126,6 +127,9 @@ class MatcherUnderTest extends CdpHogflowSubscriptionMatcherConsumer {
             }
             if (sql.includes('SELECT id, state FROM cyclotron_jobs')) {
                 return Promise.resolve({ rows: this.wakeRows, rowCount: this.wakeRows.length })
+            }
+            if (sql.includes('SELECT id, team_id, person_id, function_id, action_id, state')) {
+                return Promise.resolve({ rows: this.mergeRows, rowCount: this.mergeRows.length })
             }
             if (sql.startsWith('UPDATE cyclotron_jobs')) {
                 return Promise.resolve({ rows: [], rowCount: this.updateRowCount })
@@ -1325,6 +1329,82 @@ describe('CdpHogflowSubscriptionMatcherConsumer', () => {
             // The bad message is dropped; the valid one still parses.
             expect(result).toHaveLength(1)
             expect((result[0] as HogFunctionInvocationGlobals).event.event).toBe('$insight_alert_firing')
+        })
+    })
+
+    describe('_parsePersonMergeBatch', () => {
+        const rawMerge = (overrides: Record<string, any> = {}): any => ({
+            value: Buffer.from(
+                JSON.stringify({
+                    team_id: 1,
+                    old_person_uuid: 'old-uuid',
+                    new_person_uuid: 'new-uuid',
+                    merged_at_ms: 1700000000000,
+                    schema_version: 1,
+                    ...overrides,
+                })
+            ),
+        })
+
+        it('maps a committed merge to its old/new person ids', async () => {
+            const result = await (matcher as any)._parsePersonMergeBatch([rawMerge()])
+            expect(result).toEqual([{ teamId: 1, oldPersonId: 'old-uuid', newPersonId: 'new-uuid' }])
+        })
+
+        it('drops self-merges, merges missing an id, and malformed messages', async () => {
+            const result = await (matcher as any)._parsePersonMergeBatch([
+                rawMerge({ new_person_uuid: 'old-uuid' }), // self-merge — nothing to re-key
+                rawMerge({ old_person_uuid: '' }), // missing source id
+                rawMerge({ new_person_uuid: '' }), // missing target id
+                { value: Buffer.from('not json') }, // malformed
+                rawMerge(),
+            ])
+            expect(result).toEqual([{ teamId: 1, oldPersonId: 'old-uuid', newPersonId: 'new-uuid' }])
+        })
+    })
+
+    describe('processMergeBatch', () => {
+        beforeEach(() => {
+            matcher.setHogFlows({ 'flow-1': makeHogFlow({ id: 'flow-1', team_id: 1 }) })
+        })
+
+        const parkedWaitRow = (overrides: Record<string, any> = {}): any => ({
+            id: 'job-1',
+            team_id: 1,
+            person_id: 'old-uuid',
+            function_id: 'flow-1',
+            action_id: 'wait_node',
+            state: Buffer.from(
+                JSON.stringify({
+                    state: { personId: 'old-uuid', currentAction: { id: 'wait_node', pollReparked: true } },
+                })
+            ),
+            ...overrides,
+        })
+
+        const lastUpdate = (): QueryCall | undefined =>
+            matcher.calls.find((c) => c.sql.startsWith('UPDATE cyclotron_jobs'))
+
+        it('re-keys a parked wait onto the survivor and clears pollReparked so the advance is matcher-attributed', async () => {
+            matcher.mergeRows = [parkedWaitRow()]
+            await matcher.processMergeBatch([{ teamId: 1, oldPersonId: 'old-uuid', newPersonId: 'new-uuid' }])
+
+            const update = lastUpdate()
+            expect(update).toBeDefined()
+            // params: [ids, person_ids, states]. person_id column moves to the survivor.
+            expect(update!.params[1]).toEqual(['new-uuid'])
+            const newState = JSON.parse((update!.params[2][0] as Buffer).toString())
+            expect(newState.state.personId).toBe('new-uuid')
+            // Cleared so the worker's ensuing re-check advance is not miscounted as a poll-only advance.
+            expect(newState.state.currentAction.pollReparked).toBe(false)
+        })
+
+        it('skips a job not parked on a wait_until_condition step, so a delay is never pulled forward', async () => {
+            // action_id points at the trigger (any non-wait step, e.g. a delay) — must be left untouched.
+            matcher.mergeRows = [parkedWaitRow({ action_id: 'trigger_node' })]
+            await matcher.processMergeBatch([{ teamId: 1, oldPersonId: 'old-uuid', newPersonId: 'new-uuid' }])
+
+            expect(lastUpdate()).toBeUndefined()
         })
     })
 
