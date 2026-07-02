@@ -1385,18 +1385,17 @@ describe('CdpHogflowSubscriptionMatcherConsumer', () => {
         const lastUpdate = (): QueryCall | undefined =>
             matcher.calls.find((c) => c.sql.startsWith('UPDATE cyclotron_jobs'))
 
-        it('re-keys a parked wait onto the survivor and clears pollReparked so the advance is matcher-attributed', async () => {
+        it('re-keys a parked wait onto the survivor (person_id column + state.personId)', async () => {
             matcher.mergeRows = [parkedWaitRow()]
             await matcher.processMergeBatch([{ teamId: 1, oldPersonId: 'old-uuid', newPersonId: 'new-uuid' }])
 
             const update = lastUpdate()
             expect(update).toBeDefined()
-            // params: [ids, person_ids, states]. person_id column moves to the survivor.
+            // params: [ids, person_ids, states]. person_id column moves to the survivor...
             expect(update!.params[1]).toEqual(['new-uuid'])
             const newState = parseJSON((update!.params[2][0] as Buffer).toString('utf-8')) as any
+            // ...and so does the persisted state.personId, so a distinct_id-less re-resolution follows it.
             expect(newState.state.personId).toBe('new-uuid')
-            // Cleared so the worker's ensuing re-check advance is not miscounted as a poll-only advance.
-            expect(newState.state.currentAction.pollReparked).toBe(false)
         })
 
         it('skips a job not parked on a wait_until_condition step, so a delay is never pulled forward', async () => {

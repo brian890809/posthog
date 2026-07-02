@@ -60,11 +60,11 @@ const counterHogflowMatcherConversionsCounted = new Counter({
 })
 
 // A person merge deletes the source person, so a wait parked on that (now-deleted) person id would
-// never be woken by the survivor's property changes. We re-point such waits at the survivor and wake
-// them for an immediate re-check; this counts the re-keyed jobs.
+// never be woken by the survivor's property changes. We re-point such waits at the survivor's id so the
+// survivor's person-stream updates can wake them; this counts the re-keyed jobs.
 const counterHogflowMatcherJobsRekeyedOnMerge = new Counter({
     name: 'cdp_hogflow_matcher_jobs_rekeyed_on_merge',
-    help: 'Parked wait_until_condition jobs re-keyed from the merged-away person to the survivor (and woken for re-check) after a person merge.',
+    help: 'Parked wait_until_condition jobs re-keyed from the merged-away person to the survivor after a person merge.',
 })
 
 // Latency of the cyclotron lookup for parked jobs. Watch this for cyclotron-node
@@ -715,9 +715,16 @@ export class CdpHogflowSubscriptionMatcherConsumer<
         return merges
     }
 
-    // Re-key parked wait_until_condition jobs from a merged-away person onto the survivor and wake them
-    // for an immediate re-check. Without this a wait parked on P_old strands until the poll/max_wait,
-    // because the survivor's property changes arrive keyed on P_new and P_old is tombstoned.
+    // Re-key parked wait_until_condition jobs from a merged-away person onto the survivor. Without this
+    // a wait parked on P_old could never be woken: the survivor's property changes arrive keyed on P_new
+    // and P_old is tombstoned. After the re-key the survivor's own clickhouse_person update (which the
+    // merge itself produces) wakes the job through the person stream, matched by the new person_id.
+    //
+    // We deliberately do NOT wake the job here (scheduled = NOW()). Waking would make the worker
+    // re-resolve the person by distinct_id, and PersonsManager caches that lookup for up to a minute —
+    // so immediately after a merge it can return the stale pre-merge person and, on re-park, write the
+    // OLD person_id back via extractPersonId, undoing this re-key. Leaving the schedule alone lets the
+    // survivor's person-stream update (or the polling backstop) wake it against the correct person.
     public async processMergeBatch(merges: PersonMerge[]): Promise<void> {
         if (merges.length === 0) {
             return
@@ -775,7 +782,7 @@ export class CdpHogflowSubscriptionMatcherConsumer<
                 if (!newPersonId || !row.state) {
                     continue
                 }
-                const newState = rewriteMergedState(row.state, newPersonId, row.id)
+                const newState = rewriteStatePersonId(row.state, newPersonId, row.id)
                 if (!newState) {
                     continue
                 }
@@ -783,12 +790,11 @@ export class CdpHogflowSubscriptionMatcherConsumer<
             }
 
             if (updates.length > 0) {
-                // scheduled = NOW() wakes the job so the worker re-resolves the (now survivor) person and
-                // re-evaluates the condition — matched branch if satisfied, otherwise a normal re-park now
-                // correctly keyed on the survivor.
+                // Re-key only — scheduled is left untouched so the job stays parked (and matchable by the
+                // person stream on the survivor's id) rather than being pulled into a stale-cache re-check.
                 const result = await client.query(
                     `UPDATE cyclotron_jobs cj
-                     SET person_id = u.person_id, state = u.state, scheduled = NOW()
+                     SET person_id = u.person_id, state = u.state
                      FROM (
                          SELECT unnest($1::uuid[]) AS id, unnest($2::text[]) AS person_id, unnest($3::bytea[]) AS state
                      ) u
@@ -1048,20 +1054,13 @@ async function runBytecode(
     }
 }
 
-// Rewrite a parked wait's state for a merge re-key: point personId at the survivor (so the worker's
-// re-resolution — which falls back to state.personId when the job has no distinct_id — lands on the
-// survivor), and clear pollReparked so the ensuing worker re-check is attributed to the matcher, not
-// the poll. Without clearing it, the merge-driven advance would inflate cdp_hogflow_wait_poll_only_advance
-// (the signal gating poll removal), because the job set pollReparked=true when it first parked.
-// Returns the new state buffer, or null if the state can't be parsed (leave the row untouched).
-function rewriteMergedState(stateBuffer: Buffer, newPersonId: string, jobId: string): Buffer | null {
+// Point the persisted personId at the merge survivor so the worker's re-resolution — which falls back
+// to state.personId when the job has no distinct_id (batch/person-triggered flows) — lands on the
+// survivor. Returns the new state buffer, or null if the state can't be parsed (leave the row untouched).
+function rewriteStatePersonId(stateBuffer: Buffer, newPersonId: string, jobId: string): Buffer | null {
     try {
         const parsed = parseJSON(stateBuffer.toString('utf-8'))
-        const state = { ...parsed.state, personId: newPersonId }
-        if (state.currentAction) {
-            state.currentAction = { ...state.currentAction, pollReparked: false }
-        }
-        parsed.state = state
+        parsed.state = { ...parsed.state, personId: newPersonId }
         return Buffer.from(JSON.stringify(parsed))
     } catch (err) {
         logger.warn('Failed to parse state during merge re-key', { jobId, err })
