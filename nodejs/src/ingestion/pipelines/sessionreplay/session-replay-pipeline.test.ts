@@ -111,7 +111,14 @@ describe('session-replay-pipeline', () => {
     // Every session resolves as already-seen, unblocked, and with a cleartext key so messages flow
     // through to recording.
     const sessionTracker = {
-        trackSession: jest.fn().mockResolvedValue(false),
+        hasSeen: jest.fn().mockImplementation((sessions: SessionSet) => {
+            const map = new SessionMap<boolean>()
+            for (const { teamId, sessionId } of sessions) {
+                map.set(teamId, sessionId, true)
+            }
+            return Promise.resolve(map)
+        }),
+        markSeen: jest.fn().mockResolvedValue(undefined),
     } as unknown as SessionTracker
     const sessionFilter = {
         handleNewSession: jest.fn().mockResolvedValue(undefined),

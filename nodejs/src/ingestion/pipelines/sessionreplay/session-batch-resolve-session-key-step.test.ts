@@ -1,5 +1,6 @@
 import { PipelineResultType, isOkResult } from '~/ingestion/framework/results'
 import { RetentionPeriod, RetentionPeriodToDaysMap } from '~/ingestion/pipelines/sessionreplay/shared/constants'
+import { SessionMap, SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { createMockSessionKey } from '~/ingestion/pipelines/sessionreplay/shared/test-helpers'
 import { KeyStore } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
@@ -12,8 +13,19 @@ import { SessionReplayHeaders } from './validate-headers-step'
 
 jest.mock('~/common/utils/logger', () => ({ logger: { debug: jest.fn() } }))
 
+// A hasSeen() implementation that answers every queried session the same way (all seen, or all new).
+const seenMap =
+    (seen: boolean) =>
+    (sessions: SessionSet): Promise<SessionMap<boolean>> => {
+        const map = new SessionMap<boolean>()
+        for (const { teamId, sessionId } of sessions) {
+            map.set(teamId, sessionId, seen)
+        }
+        return Promise.resolve(map)
+    }
+
 describe('createResolveSessionKeyStep', () => {
-    let mockSessionTracker: jest.Mocked<Pick<SessionTracker, 'trackSession'>>
+    let mockSessionTracker: jest.Mocked<Pick<SessionTracker, 'hasSeen' | 'markSeen'>>
     let mockSessionFilter: jest.Mocked<Pick<SessionFilter, 'handleNewSession' | 'isBlocked'>>
     let mockKeyStore: jest.Mocked<Pick<KeyStore, 'generateKey' | 'getKey'>>
     let mockSessionBatchManager: jest.Mocked<Pick<SessionBatchManager, 'trackDroppedOffset'>>
@@ -53,7 +65,11 @@ describe('createResolveSessionKeyStep', () => {
 
     beforeEach(() => {
         jest.clearAllMocks()
-        mockSessionTracker = { trackSession: jest.fn().mockResolvedValue(false) }
+        // Default: sessions already seen (existing), so the getKey path runs and nothing is marked.
+        mockSessionTracker = {
+            hasSeen: jest.fn(seenMap(true)),
+            markSeen: jest.fn().mockResolvedValue(undefined),
+        }
         mockSessionFilter = {
             handleNewSession: jest.fn().mockResolvedValue(undefined),
             isBlocked: jest.fn().mockResolvedValue(false),
@@ -65,8 +81,8 @@ describe('createResolveSessionKeyStep', () => {
         mockSessionBatchManager = { trackDroppedOffset: jest.fn() }
     })
 
-    it('generates a key for a new session, rate-limiting it, and attaches it', async () => {
-        mockSessionTracker.trackSession.mockResolvedValue(true)
+    it('generates a key for a new session, rate-limiting it, and marks it seen after', async () => {
+        mockSessionTracker.hasSeen.mockImplementation(seenMap(false))
         const generated = createMockSessionKey({ encryptedKey: Buffer.from('new-key') })
         mockKeyStore.generateKey.mockResolvedValue(generated)
         const step = createStep()
@@ -78,10 +94,12 @@ describe('createResolveSessionKeyStep', () => {
         expect(mockKeyStore.generateKey).toHaveBeenCalledWith('a', 1, RetentionPeriodToDaysMap['90d'])
         expect(mockKeyStore.getKey).not.toHaveBeenCalled()
         expect(isOkResult(results[0]) ? results[0].value.sessionKey : null).toBe(generated)
+        // Marked seen only after the key was generated.
+        expect(mockSessionTracker.markSeen).toHaveBeenCalledWith(new SessionSet().add(1, 'a'))
     })
 
-    it('fetches the existing key for a seen session without rate-limiting it', async () => {
-        mockSessionTracker.trackSession.mockResolvedValue(false)
+    it('fetches the existing key for a seen session without rate-limiting or marking it', async () => {
+        // Default hasSeen: already seen.
         const existing = createMockSessionKey({ encryptedKey: Buffer.from('existing-key') })
         mockKeyStore.getKey.mockResolvedValue(existing)
         const step = createStep()
@@ -92,22 +110,26 @@ describe('createResolveSessionKeyStep', () => {
         expect(mockKeyStore.getKey).toHaveBeenCalledWith('a', 1)
         expect(mockKeyStore.generateKey).not.toHaveBeenCalled()
         expect(isOkResult(results[0]) ? results[0].value.sessionKey : null).toBe(existing)
+        // Nothing new to mark.
+        expect(mockSessionTracker.markSeen).toHaveBeenCalledWith(new SessionSet())
     })
 
     it('runs each session bootstrap once and fans the key out to all of its messages', async () => {
-        mockSessionTracker.trackSession.mockResolvedValue(true)
+        mockSessionTracker.hasSeen.mockImplementation(seenMap(false))
         const generated = createMockSessionKey({ encryptedKey: Buffer.from('shared-key') })
         mockKeyStore.generateKey.mockResolvedValue(generated)
         const step = createStep()
 
         const results = await step([element(1, 'a'), element(1, 'a'), element(1, 'a')])
 
-        // A new session must be tracked, rate-limited, and keyed exactly once, no matter how many of
-        // its messages are in the batch — repeating would over-consume the new-session budget and
-        // regenerate the key.
-        expect(mockSessionTracker.trackSession).toHaveBeenCalledTimes(1)
+        // A new session must be rate-limited and keyed exactly once, no matter how many of its
+        // messages are in the batch — repeating would over-consume the new-session budget and
+        // regenerate the key. hasSeen and markSeen run once each for the whole batch.
+        expect(mockSessionTracker.hasSeen).toHaveBeenCalledTimes(1)
         expect(mockSessionFilter.handleNewSession).toHaveBeenCalledTimes(1)
         expect(mockKeyStore.generateKey).toHaveBeenCalledTimes(1)
+        expect(mockSessionTracker.markSeen).toHaveBeenCalledTimes(1)
+        expect(mockSessionTracker.markSeen).toHaveBeenCalledWith(new SessionSet().add(1, 'a'))
         expect(results.map((r) => (isOkResult(r) ? r.value.sessionKey : null))).toEqual([
             generated,
             generated,
@@ -150,7 +172,7 @@ describe('createResolveSessionKeyStep', () => {
         // A new session runs handleNewSession (which may block it via its own budget) before the
         // block check — so a new session can be dropped by the block it just tripped. Reordering
         // isBlocked before handleNewSession would regress this.
-        mockSessionTracker.trackSession.mockResolvedValue(true)
+        mockSessionTracker.hasSeen.mockImplementation(seenMap(false))
         mockSessionFilter.isBlocked.mockResolvedValue(true)
         const step = createStep()
 
@@ -159,6 +181,8 @@ describe('createResolveSessionKeyStep', () => {
         expect(mockSessionFilter.handleNewSession).toHaveBeenCalledWith(1, 'new-and-blocked')
         expect(results[0].type).toBe(PipelineResultType.DROP)
         expect(mockSessionBatchManager.trackDroppedOffset).toHaveBeenCalledWith(2, 7)
+        // Still marked seen so it isn't rate-limited again next batch.
+        expect(mockSessionTracker.markSeen).toHaveBeenCalledWith(new SessionSet().add(1, 'new-and-blocked'))
     })
 
     it('drops a session whose key has been deleted, tracking its offset', async () => {
@@ -171,11 +195,14 @@ describe('createResolveSessionKeyStep', () => {
         expect(mockSessionBatchManager.trackDroppedOffset).toHaveBeenCalledWith(3, 9)
     })
 
-    it('propagates a keystore failure so the retry wrapper can retry the whole step', async () => {
-        mockSessionTracker.trackSession.mockResolvedValue(true)
+    it('propagates a keystore failure and leaves the session unseen so the retry regenerates', async () => {
+        mockSessionTracker.hasSeen.mockImplementation(seenMap(false))
         mockKeyStore.generateKey.mockRejectedValue(new Error('KMS unavailable'))
         const step = createStep()
 
         await expect(step([element(1, 'a')])).rejects.toThrow('KMS unavailable')
+        // Critically, the session is NOT marked seen — otherwise the retry would fetch a key that was
+        // never generated and record cleartext.
+        expect(mockSessionTracker.markSeen).not.toHaveBeenCalled()
     })
 })

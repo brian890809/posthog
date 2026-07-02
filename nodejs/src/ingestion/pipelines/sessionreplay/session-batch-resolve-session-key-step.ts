@@ -23,14 +23,18 @@ type SessionResolution = { sessionKey: SessionKey } | { drop: string }
  *
  * For each distinct `(teamId, sessionId)` (deduped via a {@link SessionSet}, so the work runs once
  * per session even when the batch holds many of its messages):
- * - track the session ({@link SessionTracker}) to learn whether it's newly seen;
+ * - check whether the session has been seen before ({@link SessionTracker.hasSeen}) to learn whether
+ *   it's new;
  * - for a new session, run the new-session rate limiter ({@link SessionFilter.handleNewSession}),
  *   which may block a team that's over its new-session budget — this consumes one token per new
  *   session, which is exactly why the work must be deduped and not repeated per message;
  * - drop the session if it's blocked;
  * - resolve its key — {@link KeyStore.generateKey} for a new session (using the retention resolved
  *   upstream to set the key's expiry), {@link KeyStore.getKey} otherwise — and drop it if the key
- *   has been deleted.
+ *   has been deleted;
+ * - mark the session seen ({@link SessionTracker.markSeen}) only after its key has been resolved, so a
+ *   keystore failure leaves it unseen and the retry regenerates rather than fetching a key that was
+ *   never generated (which would record cleartext).
  *
  * Keys on the `session_id` header, which {@link createValidateSessionReplayHeadersStep} guarantees is
  * present, and on the retention resolved by {@link createResolveRetentionStep}, so it must run after
@@ -61,32 +65,42 @@ export function createResolveSessionKeyStep<
             retentionBySession.set(value.team.teamId, value.headers.session_id, value.retentionPeriod)
         }
 
+        // One batched Redis read tells us which sessions are new.
+        const seen = await sessionTracker.hasSeen(toResolve)
+
         const resolutions = new SessionMap<SessionResolution>()
+        const newlySeen = new SessionSet()
         await Promise.all(
             [...toResolve].map(async ({ teamId, sessionId }) => {
-                const isNewSession = await sessionTracker.trackSession(teamId, sessionId)
+                const isNewSession = !seen.get(teamId, sessionId)
                 if (isNewSession) {
                     await sessionFilter.handleNewSession(teamId, sessionId)
                 }
 
+                let resolution: SessionResolution
                 if (await sessionFilter.isBlocked(teamId, sessionId)) {
-                    resolutions.set(teamId, sessionId, { drop: 'session_blocked' })
-                    return
+                    resolution = { drop: 'session_blocked' }
+                } else {
+                    const retentionPeriod = retentionBySession.get(teamId, sessionId)!
+                    // A keystore failure throws here, aborting the batch before the markSeen below, so
+                    // the retry regenerates instead of marking a session seen without a key.
+                    const sessionKey = isNewSession
+                        ? await keyStore.generateKey(sessionId, teamId, RetentionPeriodToDaysMap[retentionPeriod])
+                        : await keyStore.getKey(sessionId, teamId)
+                    resolution = sessionKey.sessionState === 'deleted' ? { drop: 'session_deleted' } : { sessionKey }
                 }
 
-                const retentionPeriod = retentionBySession.get(teamId, sessionId)!
-                const sessionKey = isNewSession
-                    ? await keyStore.generateKey(sessionId, teamId, RetentionPeriodToDaysMap[retentionPeriod])
-                    : await keyStore.getKey(sessionId, teamId)
-
-                if (sessionKey.sessionState === 'deleted') {
-                    resolutions.set(teamId, sessionId, { drop: 'session_deleted' })
-                    return
+                if (isNewSession) {
+                    newlySeen.add(teamId, sessionId)
                 }
-
-                resolutions.set(teamId, sessionId, { sessionKey })
+                resolutions.set(teamId, sessionId, resolution)
             })
         )
+
+        // Mark the new sessions seen in one batched write, only now that every key has been durably
+        // resolved. Marking on the initial check instead would, on a keystore retry, make a session
+        // read as existing and fetch a key that was never generated — recording cleartext.
+        await sessionTracker.markSeen(newlySeen)
 
         return values.map((value) => {
             const resolution = resolutions.get(value.team.teamId, value.headers.session_id)!
