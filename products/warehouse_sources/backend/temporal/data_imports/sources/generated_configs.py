@@ -1344,6 +1344,11 @@ class GoLoginSourceConfig(config.Config):
 
 
 @config.config
+class GojiberrySourceConfig(config.Config):
+    pass
+
+
+@config.config
 class GoldcastSourceConfig(config.Config):
     pass
 
@@ -1941,6 +1946,11 @@ class MentionSourceConfig(config.Config):
 
 @config.config
 class MercadoAdsSourceConfig(config.Config):
+    pass
+
+
+@config.config
+class MercurySourceConfig(config.Config):
     pass
 
 
@@ -3168,6 +3178,11 @@ class TawkToSourceConfig(config.Config):
 
 
 @config.config
+class TeachableSourceConfig(config.Config):
+    pass
+
+
+@config.config
 class TeamtailorSourceConfig(config.Config):
     pass
 
@@ -3855,6 +3870,7 @@ def get_config_for_source(source: ExternalDataSourceType):
         ExternalDataSourceType.GMAIL: GmailSourceConfig,
         ExternalDataSourceType.GOCARDLESS: GoCardlessSourceConfig,
         ExternalDataSourceType.GOLOGIN: GoLoginSourceConfig,
+        ExternalDataSourceType.GOJIBERRY: GojiberrySourceConfig,
         ExternalDataSourceType.GOLDCAST: GoldcastSourceConfig,
         ExternalDataSourceType.GONG: GongSourceConfig,
         ExternalDataSourceType.GOOGLEADMANAGER: GoogleAdManagerSourceConfig,
@@ -3969,6 +3985,7 @@ def get_config_for_source(source: ExternalDataSourceType):
         ExternalDataSourceType.MENDELEY: MendeleySourceConfig,
         ExternalDataSourceType.MENTION: MentionSourceConfig,
         ExternalDataSourceType.MERCADOADS: MercadoAdsSourceConfig,
+        ExternalDataSourceType.MERCURY: MercurySourceConfig,
         ExternalDataSourceType.MERGE: MergeSourceConfig,
         ExternalDataSourceType.METAADS: MetaAdsSourceConfig,
         ExternalDataSourceType.METABASE: MetabaseSourceConfig,
@@ -4198,6 +4215,7 @@ def get_config_for_source(source: ExternalDataSourceType):
         ExternalDataSourceType.TALKWALKER: TalkwalkerSourceConfig,
         ExternalDataSourceType.TAVUS: TavusSourceConfig,
         ExternalDataSourceType.TAWKTO: TawkToSourceConfig,
+        ExternalDataSourceType.TEACHABLE: TeachableSourceConfig,
         ExternalDataSourceType.TEAMTAILOR: TeamtailorSourceConfig,
         ExternalDataSourceType.TEAMWORK: TeamworkSourceConfig,
         ExternalDataSourceType.TEMPO: TempoSourceConfig,

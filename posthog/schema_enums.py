@@ -1823,6 +1823,9 @@ class ExternalDataSourceType(StrEnum):
     APP_LOVIN = "AppLovin"
     BASEROW = "Baserow"
     PLUNK = "Plunk"
+    MERCURY = "Mercury"
+    GOJIBERRY = "Gojiberry"
+    TEACHABLE = "Teachable"
 
 
 class ExternalQueryErrorCode(StrEnum):

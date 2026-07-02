@@ -22291,7 +22291,10 @@
                 "NextdoorAds",
                 "AppLovin",
                 "Baserow",
-                "Plunk"
+                "Plunk",
+                "Mercury",
+                "Gojiberry",
+                "Teachable"
             ],
             "type": "string"
         },
