@@ -39,30 +39,17 @@ describe('createValidateSessionReplayHeadersStep', () => {
         }
     })
 
-    it('DLQs when the token header is missing (capture always sets it, so absence is a bug)', async () => {
-        const result = await step({ headers: createTestEventHeaders({ session_id: 'sess-1', distinct_id: 'user-1' }) })
+    // Capture guarantees all three headers, so a missing one is an upstream bug → DLQ.
+    it.each([
+        { missing: 'token', headers: { session_id: 'sess-1', distinct_id: 'user-1' }, reason: 'no_token_in_header' },
+        { missing: 'session_id', headers: { token: 'tok', distinct_id: 'user-1' }, reason: 'no_session_id_in_header' },
+        { missing: 'distinct_id', headers: { token: 'tok', session_id: 'sess-1' }, reason: 'no_distinct_id_in_header' },
+    ])('DLQs when the $missing header is missing', async ({ headers, reason }) => {
+        const result = await step({ headers: createTestEventHeaders(headers) })
 
         expect(result.type).toBe(PipelineResultType.DLQ)
         if (result.type === PipelineResultType.DLQ) {
-            expect(result.reason).toBe('no_token_in_header')
-        }
-    })
-
-    it('DLQs when the session_id header is missing', async () => {
-        const result = await step({ headers: createTestEventHeaders({ token: 'tok', distinct_id: 'user-1' }) })
-
-        expect(result.type).toBe(PipelineResultType.DLQ)
-        if (result.type === PipelineResultType.DLQ) {
-            expect(result.reason).toBe('no_session_id_in_header')
-        }
-    })
-
-    it('DLQs when the distinct_id header is missing', async () => {
-        const result = await step({ headers: createTestEventHeaders({ token: 'tok', session_id: 'sess-1' }) })
-
-        expect(result.type).toBe(PipelineResultType.DLQ)
-        if (result.type === PipelineResultType.DLQ) {
-            expect(result.reason).toBe('no_distinct_id_in_header')
+            expect(result.reason).toBe(reason)
         }
     })
 })
