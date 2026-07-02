@@ -172,6 +172,7 @@ class TestGenerateSuggestionsForTeam(BaseTest):
 
         self.assertEqual(result.status, "generated")
         self.assertEqual(len(result.rules), 1)  # invalid/no-match rule dropped by validation
+        assert result.suggestion_id is not None
         row = WebAnalyticsPathCleaningSuggestion.objects.for_team(self.team.id).get(id=result.suggestion_id)
         self.assertEqual(len(row.suggested_rules), 1)
         self.assertEqual(row.distinct_path_count, 500)
