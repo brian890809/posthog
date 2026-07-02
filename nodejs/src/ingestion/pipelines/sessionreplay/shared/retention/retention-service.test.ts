@@ -157,5 +157,16 @@ describe('RetentionService', () => {
                 24 * 60 * 60
             )
         })
+
+        it('propagates a Redis read failure (no team-service fallback, so the retry wrapper re-runs)', async () => {
+            // Redis holds each session's locked-in retention, so we must not resolve from the
+            // (current) team value on a Redis failure — fail fast and let the caller retry/crash.
+            mockRedisClient.mget = jest.fn().mockRejectedValue(new Error('Command timed out'))
+
+            await expect(retentionService.resolveSessionRetentions(sessionSet([1, 'a']))).rejects.toThrow(
+                'Command timed out'
+            )
+            expect(mockTeamService.getRetentionPeriodByTeamId).not.toHaveBeenCalled()
+        })
     })
 })
