@@ -1,23 +1,26 @@
 /* eslint-disable no-console -- worker logs to stdout */
 /**
  * Image-scrub consumer worker: reads raw images off the scrub topic (key = `image:{team}:{hash}`),
- * scrubs them, and batches the bytes into shard objects + a content-hash-keyed parquet index (see
- * shard-store.ts + README). Stage 1 scrub is the sharp-only blur (blur.ts); Stage 2 swaps in advancedScrub.
+ * runs the native ML scrub (NSFW gate + face mosaic + text solid-fill, scrub.ts) over each one, and
+ * batches the bytes into shard objects + a content-hash-keyed parquet index (see shard-store.ts + README).
+ * Models load once at startup; polyfill.ts is imported first so tfjs-node loads on Node 23+.
  *
- *   npm run consume   (needs the dev stack: Kafka + SeaweedFS; env overrides in config.ts)
+ *   npm run consume   (needs the dev stack + `npm run setup` for the models; env overrides in config.ts)
  */
+import './polyfill.ts'
+
 import { Kafka } from 'kafkajs'
 
 import { ImageBatcher } from './batcher.ts'
-import { blurOnly } from './blur.ts'
 import { ensureBucket, ensureTopic, makeS3 } from './clients.ts'
 import { loadConfig } from './config.ts'
 import { hashImageBytes, isImageRef, parseImageRef } from './content-ref.ts'
 import { ScrubMetrics, startMetricsServer } from './metrics.ts'
+import { type Models, advancedScrub, loadModels } from './scrub.ts'
 import { ImageShardStore, ScrubbedImage } from './shard-store.ts'
 
 /** Parse + verify + scrub one message into a ScrubbedImage, or null to skip it. */
-async function scrubImage(ref: string, raw: Buffer): Promise<ScrubbedImage | null> {
+async function scrubImage(ref: string, raw: Buffer, models: Models): Promise<ScrubbedImage | null> {
     // Reject bytes whose hash doesn't match the key's: content integrity, so the object a reference points
     // at always matches its content. Not a team-authorization check (the hash is content-only and unkeyed);
     // a producer forging another team's key is out of scope, this is an internal producer-only topic.
@@ -26,13 +29,14 @@ async function scrubImage(ref: string, raw: Buffer): Promise<ScrubbedImage | nul
         ScrubMetrics.incMismatch()
         return null
     }
-    const bytes = await blurOnly(raw)
+    const { out: bytes } = await advancedScrub(raw, models)
     ScrubMetrics.incScrubbed()
     return { teamId: parsed.teamId, hash: parsed.hash, bytes }
 }
 
 async function main(): Promise<void> {
     const cfg = loadConfig()
+    const models = await loadModels() // loaded once; scrub reuses across every message
     const s3 = makeS3(cfg)
     await ensureBucket(s3, cfg.s3.bucket)
     const kafka = new Kafka({ clientId: 'ml-mirror-image-scrub', brokers: cfg.kafkaBrokers })
@@ -95,7 +99,7 @@ async function main(): Promise<void> {
                 const ref = m.key?.toString('utf8')
                 if (ref && isImageRef(ref) && m.value) {
                     try {
-                        const scrubbed = await scrubImage(ref, m.value)
+                        const scrubbed = await scrubImage(ref, m.value, models)
                         if (scrubbed) {
                             batcher.add(scrubbed)
                         }

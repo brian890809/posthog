@@ -10,6 +10,12 @@ const MAX_LONG_SIDE = 96
 // decode to many times its byte size). 50 MP is generous for real screenshots; larger inputs throw.
 const LIMIT_INPUT_PIXELS = 50_000_000
 
+// 1x1 transparent PNG: the output substituted for an image the NSFW/gore gate rejects (see advancedScrub).
+export const BLANK_PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64'
+)
+
 function targetDims(w: number, h: number): [number, number] {
     const scale = Math.min(DOWNSAMPLE_RATIO, MAX_LONG_SIDE / Math.max(w, h))
     return [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))]
