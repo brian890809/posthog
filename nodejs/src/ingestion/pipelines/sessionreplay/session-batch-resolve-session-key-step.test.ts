@@ -5,6 +5,7 @@ import { KeyStore } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
 import { createResolveSessionKeyStep } from './session-batch-resolve-session-key-step'
+import { SessionBatchManager } from './sessions/session-batch-manager'
 import { SessionFilter } from './sessions/session-filter'
 import { SessionTracker } from './sessions/session-tracker'
 import { SessionReplayHeaders } from './validate-headers-step'
@@ -15,24 +16,39 @@ describe('createResolveSessionKeyStep', () => {
     let mockSessionTracker: jest.Mocked<Pick<SessionTracker, 'trackSession'>>
     let mockSessionFilter: jest.Mocked<Pick<SessionFilter, 'handleNewSession' | 'isBlocked'>>
     let mockKeyStore: jest.Mocked<Pick<KeyStore, 'generateKey' | 'getKey'>>
+    let mockSessionBatchManager: jest.Mocked<Pick<SessionBatchManager, 'trackDroppedOffset'>>
 
-    // Minimal element carrying just what the step reads.
+    // Minimal element carrying just what the step reads (message offset, team, session_id header, retention).
     const element = (
         teamId: number,
         sessionId: string,
-        retentionPeriod: RetentionPeriod = '30d'
-    ): { team: TeamForReplay; headers: SessionReplayHeaders; retentionPeriod: RetentionPeriod } =>
+        retentionPeriod: RetentionPeriod = '30d',
+        partition = 0,
+        offset = 0
+    ): {
+        message: { partition: number; offset: number }
+        team: TeamForReplay
+        headers: SessionReplayHeaders
+        retentionPeriod: RetentionPeriod
+    } =>
         ({
+            message: { partition, offset },
             team: { teamId, consoleLogIngestionEnabled: false, aiTrainingOptedIn: true },
             headers: { token: 'token', session_id: sessionId, distinct_id: 'distinct-1' },
             retentionPeriod,
-        }) as unknown as { team: TeamForReplay; headers: SessionReplayHeaders; retentionPeriod: RetentionPeriod }
+        }) as unknown as {
+            message: { partition: number; offset: number }
+            team: TeamForReplay
+            headers: SessionReplayHeaders
+            retentionPeriod: RetentionPeriod
+        }
 
     const createStep = () =>
         createResolveSessionKeyStep(
             mockSessionTracker as unknown as SessionTracker,
             mockSessionFilter as unknown as SessionFilter,
-            mockKeyStore as unknown as KeyStore
+            mockKeyStore as unknown as KeyStore,
+            mockSessionBatchManager as unknown as SessionBatchManager
         )
 
     beforeEach(() => {
@@ -46,6 +62,7 @@ describe('createResolveSessionKeyStep', () => {
             generateKey: jest.fn().mockResolvedValue(createMockSessionKey()),
             getKey: jest.fn().mockResolvedValue(createMockSessionKey()),
         }
+        mockSessionBatchManager = { trackDroppedOffset: jest.fn() }
     })
 
     it('generates a key for a new session, rate-limiting it, and attaches it', async () => {
@@ -112,27 +129,46 @@ describe('createResolveSessionKeyStep', () => {
         expect(results.map((r) => (isOkResult(r) ? r.value.sessionKey : null))).toEqual([keyA, keyB])
     })
 
-    it('drops a blocked session without resolving a key, keeping the rest', async () => {
+    it('drops a blocked session without resolving a key, tracking its offset, keeping the rest', async () => {
         mockSessionFilter.isBlocked.mockImplementation((_teamId: number, sessionId: string) =>
             Promise.resolve(sessionId === 'blocked')
         )
         const step = createStep()
 
-        const results = await step([element(1, 'blocked'), element(1, 'ok')])
+        const results = await step([element(1, 'blocked', '30d', 4, 42), element(1, 'ok')])
 
         expect(results[0].type).toBe(PipelineResultType.DROP)
         expect(isOkResult(results[1])).toBe(true)
         // A blocked session never resolves a key.
         expect(mockKeyStore.getKey).not.toHaveBeenCalledWith('blocked', 1)
+        // The dropped message must still track its offset or its partition could replay forever.
+        expect(mockSessionBatchManager.trackDroppedOffset).toHaveBeenCalledTimes(1)
+        expect(mockSessionBatchManager.trackDroppedOffset).toHaveBeenCalledWith(4, 42)
     })
 
-    it('drops a session whose key has been deleted', async () => {
+    it('rate-limits then blocks a brand-new session in the same batch, dropping it', async () => {
+        // A new session runs handleNewSession (which may block it via its own budget) before the
+        // block check — so a new session can be dropped by the block it just tripped. Reordering
+        // isBlocked before handleNewSession would regress this.
+        mockSessionTracker.trackSession.mockResolvedValue(true)
+        mockSessionFilter.isBlocked.mockResolvedValue(true)
+        const step = createStep()
+
+        const results = await step([element(1, 'new-and-blocked', '30d', 2, 7)])
+
+        expect(mockSessionFilter.handleNewSession).toHaveBeenCalledWith(1, 'new-and-blocked')
+        expect(results[0].type).toBe(PipelineResultType.DROP)
+        expect(mockSessionBatchManager.trackDroppedOffset).toHaveBeenCalledWith(2, 7)
+    })
+
+    it('drops a session whose key has been deleted, tracking its offset', async () => {
         mockKeyStore.getKey.mockResolvedValue(createMockSessionKey({ sessionState: 'deleted', deletedAt: 1 }))
         const step = createStep()
 
-        const results = await step([element(1, 'gone')])
+        const results = await step([element(1, 'gone', '30d', 3, 9)])
 
         expect(results[0].type).toBe(PipelineResultType.DROP)
+        expect(mockSessionBatchManager.trackDroppedOffset).toHaveBeenCalledWith(3, 9)
     })
 
     it('propagates a keystore failure so the retry wrapper can retry the whole step', async () => {

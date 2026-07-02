@@ -1,3 +1,5 @@
+import { Message } from 'node-rdkafka'
+
 import { logger } from '~/common/utils/logger'
 import { BatchProcessingStep } from '~/ingestion/framework/base-batch-pipeline'
 import { drop, ok } from '~/ingestion/framework/results'
@@ -6,6 +8,7 @@ import { SessionMap, SessionSet } from '~/ingestion/pipelines/sessionreplay/shar
 import { KeyStore, SessionKey } from '~/ingestion/pipelines/sessionreplay/shared/types'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
+import { SessionBatchManager } from './sessions/session-batch-manager'
 import { SessionFilter } from './sessions/session-filter'
 import { SessionTracker } from './sessions/session-tracker'
 import { SessionReplayHeaders } from './validate-headers-step'
@@ -32,14 +35,22 @@ type SessionResolution = { sessionKey: SessionKey } | { drop: string }
  * Keys on the `session_id` header, which {@link createValidateSessionReplayHeadersStep} guarantees is
  * present, and on the retention resolved by {@link createResolveRetentionStep}, so it must run after
  * both. A transient failure (e.g. keystore Redis/KMS) throws so the pipeline's retry wrapper can
- * re-run the step; the tracker and filter fail open on Redis errors, matching prior behavior.
+ * re-run the step; the tracker and filter fail open on Redis errors, matching prior behavior. A
+ * dropped message's Kafka offset is tracked before the drop so it still commits (see
+ * {@link SessionBatchManager.trackDroppedOffset}).
  */
 export function createResolveSessionKeyStep<
-    T extends { team: TeamForReplay; headers: SessionReplayHeaders; retentionPeriod: RetentionPeriod },
+    T extends {
+        message: Pick<Message, 'partition' | 'offset'>
+        team: TeamForReplay
+        headers: SessionReplayHeaders
+        retentionPeriod: RetentionPeriod
+    },
 >(
     sessionTracker: SessionTracker,
     sessionFilter: SessionFilter,
-    keyStore: KeyStore
+    keyStore: KeyStore,
+    sessionBatchManager: SessionBatchManager
 ): BatchProcessingStep<T, T & { sessionKey: SessionKey }> {
     return async function resolveSessionKeyStep(values) {
         // Dedupe repeated sessions so each one's Redis bootstrap runs exactly once per batch.
@@ -80,6 +91,9 @@ export function createResolveSessionKeyStep<
         return values.map((value) => {
             const resolution = resolutions.get(value.team.teamId, value.headers.session_id)!
             if ('drop' in resolution) {
+                // Track the offset before dropping so this message still commits — the recorder never
+                // sees a dropped session, so nothing else would.
+                sessionBatchManager.trackDroppedOffset(value.message.partition, value.message.offset)
                 logger.debug('🔁', 'session_replay_session_dropped_before_record', {
                     sessionId: value.headers.session_id,
                     teamId: value.team.teamId,

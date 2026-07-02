@@ -81,10 +81,10 @@ export function createMlMirrorReplayPipeline(
                 })
                 // Track the session, rate-limit/block new sessions, and resolve its encryption key —
                 // off the S3 write path. Blocked and deleted sessions are dropped here.
-                .pipeBatchWithRetry(createResolveSessionKeyStep(sessionTracker, sessionFilter, keyStore), {
-                    tries: 3,
-                    sleepMs: 100,
-                })
+                .pipeBatchWithRetry(
+                    createResolveSessionKeyStep(sessionTracker, sessionFilter, keyStore, sessionBatchManager),
+                    { tries: 3, sleepMs: 100 }
+                )
                 .filterMap(
                     (element) => ({
                         result: element.result,
