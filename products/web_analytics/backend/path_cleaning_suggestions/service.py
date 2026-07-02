@@ -161,7 +161,7 @@ def validate_and_annotate_rules(
         for path in paths:
             try:
                 cleaned = compiled.sub(rule.alias, path)
-            except re2.error:
+            except (re2.error, IndexError):
                 # LLM produced an alias with a backreference the regex can't satisfy (e.g. `\1` with
                 # no capture group). Drop the rule rather than let it fail the whole team's run.
                 logger.info("path_cleaning_suggestion_invalid_alias", regex=rule.regex, alias=rule.alias)

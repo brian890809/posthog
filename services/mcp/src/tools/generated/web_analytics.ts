@@ -103,6 +103,9 @@ const heatmapsSavedCreate = (): ToolBase<typeof HeatmapsSavedCreateSchema, Schem
         if (params.type !== undefined) {
             body['type'] = params.type
         }
+        if (params.block_consent_modals !== undefined) {
+            body['block_consent_modals'] = params.block_consent_modals
+        }
         const result = await context.api.request<Schemas.HeatmapScreenshotResponse>({
             method: 'POST',
             path: `/api/projects/${encodeURIComponent(String(projectId))}/saved/`,
@@ -199,6 +202,9 @@ const heatmapsSavedUpdate = (): ToolBase<typeof HeatmapsSavedUpdateSchema, Schem
         }
         if (params.deleted !== undefined) {
             body['deleted'] = params.deleted
+        }
+        if (params.block_consent_modals !== undefined) {
+            body['block_consent_modals'] = params.block_consent_modals
         }
         const result = await context.api.request<Schemas.HeatmapScreenshotResponse>({
             method: 'PATCH',

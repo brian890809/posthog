@@ -147,11 +147,17 @@ tools:
     web-analytics-achievements-overview:
         operation: web_analytics_achievements_overview
         enabled: false
+    web-analytics-achievements-preferences:
+        operation: web_analytics_achievements_preferences
+        enabled: false
     web-analytics-achievements-record-interaction:
         operation: web_analytics_achievements_record_interaction
         enabled: false
     web-analytics-achievements-record-visit:
         operation: web_analytics_achievements_record_visit
+        enabled: false
+    web-analytics-achievements-update-preferences:
+        operation: web_analytics_achievements_update_preferences
         enabled: false
     web-analytics-filter-presets-create:
         operation: web_analytics_filter_presets_create
@@ -234,6 +240,9 @@ tools:
         description: >
             Dismiss a suggested set of path-cleaning rules by its `id` so it no longer surfaces in the list or the
             in-app banner. Use when the user isn't interested in the suggestion. Does not change any existing rules.
+    web-analytics-recap:
+        operation: web_analytics_recap
+        enabled: false
     web-analytics-weekly-digest:
         operation: web_analytics_weekly_digest
         enabled: true
