@@ -16,8 +16,8 @@ import { SessionReplayHeaders } from './validate-headers-step'
  * path, and a session bound for the wrong retention is never parsed or written.
  *
  * A session already held in the current (unflushed) batch reuses the retention resolved for it
- * earlier; only the rest are resolved via the service (batched Redis MGET + deduped Postgres
- * fallback). Keys on the `session_id` header, which {@link createValidateSessionReplayHeadersStep}
+ * earlier; only the rest are resolved via the retention service (batched Redis MGET + a deduped
+ * team service fallback). Keys on the `session_id` header, which {@link createValidateSessionReplayHeadersStep}
  * guarantees is present. A session whose retention can't be resolved (deleted/unknown team, invalid
  * value) is dropped. A transient failure (e.g. Redis) is thrown by the service so the pipeline's
  * retry wrapper can re-run the step.

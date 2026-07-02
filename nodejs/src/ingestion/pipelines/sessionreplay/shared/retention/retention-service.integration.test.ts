@@ -42,8 +42,8 @@ describe('RetentionService (integration)', () => {
         )
     }
 
-    it('resolves from Postgres on a miss, then serves the second lookup from Redis', async () => {
-        const teamService = new TeamService(postgres)
+    it('resolves via the team service on a miss, then serves the second lookup from Redis', async () => {
+        const teamService = new TeamService(postgres) // team service is Postgres-backed
         const getRetentionSpy = jest.spyOn(teamService, 'getRetentionPeriodByTeamId')
         const service = new RetentionService(redisPool, teamService)
         const sessionId = `it-hit-${Date.now()}` // unique so the first lookup is a real cache miss
@@ -54,7 +54,7 @@ describe('RetentionService (integration)', () => {
         const second = await service.resolveSessionRetentions(new SessionSet().add(teamId, sessionId))
         expect(second.get(teamId, sessionId)).toEqual({ resolved: true, retentionPeriod: '30d' })
 
-        // Postgres (via the team service) is consulted once; the second lookup is served from Redis.
+        // The team service is consulted once; the second lookup is served from Redis.
         expect(getRetentionSpy).toHaveBeenCalledTimes(1)
     })
 
@@ -68,15 +68,15 @@ describe('RetentionService (integration)', () => {
         const first = await service.resolveSessionRetentions(new SessionSet().add(unknownTeamId, sessionId))
         expect(first.get(unknownTeamId, sessionId)).toEqual({ resolved: false })
 
-        // A null retention is not written to Redis, so the second lookup consults Postgres again
-        // rather than serving a stale miss from the cache.
+        // A null retention is not written to Redis, so the second lookup consults the team service
+        // again rather than serving a stale miss from the cache.
         const second = await service.resolveSessionRetentions(new SessionSet().add(unknownTeamId, sessionId))
         expect(second.get(unknownTeamId, sessionId)).toEqual({ resolved: false })
         expect(getRetentionSpy).toHaveBeenCalledTimes(2)
     })
 
     // Every allowed period must resolve and round-trip through Redis; driven off the authoritative set.
-    it.each([...ValidRetentionPeriods])('resolves retention %s end-to-end (Postgres -> Redis)', async (period) => {
+    it.each([...ValidRetentionPeriods])('resolves retention %s end-to-end (team service -> Redis)', async (period) => {
         await setTeamRetention(period)
         const service = new RetentionService(redisPool, new TeamService(postgres))
         const sessionId = `it-matrix-${period}-${Date.now()}`

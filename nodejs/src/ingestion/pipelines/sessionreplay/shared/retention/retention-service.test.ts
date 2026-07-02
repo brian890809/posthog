@@ -70,7 +70,7 @@ describe('RetentionService', () => {
             expect(mockRedisClient.mget).not.toHaveBeenCalled()
         })
 
-        it('resolves cached hits in one MGET without hitting Postgres', async () => {
+        it('resolves cached hits in one MGET without hitting the team service', async () => {
             mockRedisClient.mget = jest.fn().mockResolvedValue(['30d', '1y'])
 
             const results = await retentionService.resolveSessionRetentions(sessionSet([1, 'a'], [2, 'b']))
@@ -86,7 +86,7 @@ describe('RetentionService', () => {
             expect(mockPipeline.set).not.toHaveBeenCalled()
         })
 
-        it('falls back to Postgres for misses across teams, deduped per team, and caches each result', async () => {
+        it('falls back to the team service for misses across teams, deduped per team, and caches each result', async () => {
             // sessions a and b share team 1 (→ 30d); session c is team 2 (→ 1y).
             mockRedisClient.mget = jest.fn().mockResolvedValue([null, null, null])
 
@@ -95,7 +95,7 @@ describe('RetentionService', () => {
             expect(results.get(1, 'a')).toEqual({ resolved: true, retentionPeriod: '30d' })
             expect(results.get(1, 'b')).toEqual({ resolved: true, retentionPeriod: '30d' })
             expect(results.get(2, 'c')).toEqual({ resolved: true, retentionPeriod: '1y' })
-            // Three misses across two distinct teams → one Postgres lookup per team.
+            // Three misses across two distinct teams → one team service lookup per team.
             expect(mockTeamService.getRetentionPeriodByTeamId).toHaveBeenCalledTimes(2)
             expect(mockTeamService.getRetentionPeriodByTeamId).toHaveBeenCalledWith(1)
             expect(mockTeamService.getRetentionPeriodByTeamId).toHaveBeenCalledWith(2)
@@ -122,6 +122,7 @@ describe('RetentionService', () => {
             const results = await retentionService.resolveSessionRetentions(sessionSet([3, 'gone']))
 
             expect(results.get(3, 'gone')).toEqual({ resolved: false })
+            expect(mockTeamService.getRetentionPeriodByTeamId).toHaveBeenCalledWith(3)
             expect(mockPipeline.set).not.toHaveBeenCalled()
             expect(RetentionServiceMetrics.incrementLookupErrors).toHaveBeenCalledTimes(1)
         })
@@ -133,15 +134,28 @@ describe('RetentionService', () => {
                 "Invalid cached retention value 'foobar' for team 1 session a"
             )
             expect(mockTeamService.getRetentionPeriodByTeamId).not.toHaveBeenCalled()
+            expect(mockPipeline.set).not.toHaveBeenCalled()
         })
 
-        it('keys each result by (teamId, sessionId) for a mix of hits and misses', async () => {
+        it('routes only misses to the team service and keys each result by (teamId, sessionId)', async () => {
+            // session 'cached' (team 2) hits Redis; session 'miss' (team 1) misses and falls back.
             mockRedisClient.mget = jest.fn().mockResolvedValue(['1y', null])
 
             const results = await retentionService.resolveSessionRetentions(sessionSet([2, 'cached'], [1, 'miss']))
 
             expect(results.get(2, 'cached')).toEqual({ resolved: true, retentionPeriod: '1y' })
             expect(results.get(1, 'miss')).toEqual({ resolved: true, retentionPeriod: '30d' })
+            // Only the miss goes to the team service; the hit does not.
+            expect(mockTeamService.getRetentionPeriodByTeamId).toHaveBeenCalledWith(1)
+            expect(mockTeamService.getRetentionPeriodByTeamId).not.toHaveBeenCalledWith(2)
+            // Only the miss is written back to Redis.
+            expect(mockPipeline.set).toHaveBeenCalledTimes(1)
+            expect(mockPipeline.set).toHaveBeenCalledWith(
+                '@posthog/replay/session-retention-miss',
+                '30d',
+                'EX',
+                24 * 60 * 60
+            )
         })
     })
 })

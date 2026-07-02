@@ -27,10 +27,11 @@ export class RetentionService {
 
     /**
      * Resolves retention for a set of sessions (already deduped by `(teamId, sessionId)`). Cache hits
-     * come from one Redis MGET; misses fall back to Postgres — one lookup per distinct team — and are
-     * written back to Redis in a single pipeline. Returns a {@link SessionMap} keyed by
-     * `(teamId, sessionId)`. Permanent failures map to `{ resolved: false }`; a transient Redis or
-     * Postgres failure throws so the caller's retry wrapper can re-run the whole lookup.
+     * come from one Redis MGET; misses fall back to the team service (Postgres-backed) — one lookup
+     * per distinct team — and are written back to Redis in a single pipeline. Returns a
+     * {@link SessionMap} keyed by `(teamId, sessionId)`. Permanent failures map to `{ resolved: false }`;
+     * a transient Redis or team service failure throws so the caller's retry wrapper can re-run the
+     * whole lookup.
      */
     public async resolveSessionRetentions(sessions: SessionSet): Promise<SessionMap<RetentionResolution>> {
         const resolutions = new SessionMap<RetentionResolution>()
@@ -57,13 +58,13 @@ export class RetentionService {
                 } else {
                     // A retention value the cache should never hold — crash rather than record with a
                     // wrong retention. Thrown without isRetriable so it propagates and takes the
-                    // consumer down (same stance as an invalid value from Postgres).
+                    // consumer down (same stance as an invalid value from the team service).
                     throw new Error(`Invalid cached retention value '${value}' for team ${teamId} session ${sessionId}`)
                 }
             }
 
             if (missIndexes.length > 0) {
-                // One Postgres lookup per distinct team, resolved concurrently, not per session.
+                // One team service lookup per distinct team, resolved concurrently, not per session.
                 const teamRetentions = new Map<TeamId, RetentionPeriod | null>()
                 await Promise.all(
                     [...new Set(missIndexes.map((i) => unique[i].teamId))].map(async (teamId) => {
