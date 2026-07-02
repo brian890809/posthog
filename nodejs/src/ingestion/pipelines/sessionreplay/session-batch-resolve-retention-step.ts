@@ -1,3 +1,5 @@
+import { Message } from 'node-rdkafka'
+
 import { logger } from '~/common/utils/logger'
 import { BatchProcessingStep } from '~/ingestion/framework/base-batch-pipeline'
 import { drop, ok } from '~/ingestion/framework/results'
@@ -18,11 +20,15 @@ import { SessionReplayHeaders } from './validate-headers-step'
  * A session already held in the current (unflushed) batch reuses the retention resolved for it
  * earlier; only the rest are resolved via the retention service (batched Redis MGET + a deduped
  * team service fallback). Keys on the `session_id` header, which {@link createValidateSessionReplayHeadersStep}
- * guarantees is present. A session whose retention can't be resolved (deleted/unknown team, invalid
- * value) is dropped. A transient failure (e.g. Redis) is thrown by the service so the pipeline's
- * retry wrapper can re-run the step.
+ * guarantees is present. A session whose retention can't be resolved because its team is unknown or
+ * deleted is dropped; a corrupt/invalid stored value instead throws (crashes) rather than recording
+ * against a wrong retention. A transient failure (e.g. Redis) is thrown by the service so the
+ * pipeline's retry wrapper can re-run the step. A dropped message's Kafka offset is tracked before
+ * the drop so it still commits (see {@link SessionBatchManager.trackDroppedOffset}).
  */
-export function createResolveRetentionStep<T extends { team: TeamForReplay; headers: SessionReplayHeaders }>(
+export function createResolveRetentionStep<
+    T extends { message: Pick<Message, 'partition' | 'offset'>; team: TeamForReplay; headers: SessionReplayHeaders },
+>(
     retentionService: RetentionService,
     sessionBatchManager: SessionBatchManager
 ): BatchProcessingStep<T, T & { retentionPeriod: RetentionPeriod }> {
@@ -48,6 +54,9 @@ export function createResolveRetentionStep<T extends { team: TeamForReplay; head
             if (resolution.resolved) {
                 return ok({ ...value, retentionPeriod: resolution.retentionPeriod })
             }
+            // Track the offset before dropping so this message still commits — the recorder never
+            // sees a dropped session, so nothing else would.
+            sessionBatchManager.trackDroppedOffset(value.message.partition, value.message.offset)
             SessionBatchMetrics.incrementSessionsDroppedMissingRetention()
             logger.warn('🔁', 'session_replay_retention_unresolved_dropping_session', {
                 sessionId: value.headers.session_id,

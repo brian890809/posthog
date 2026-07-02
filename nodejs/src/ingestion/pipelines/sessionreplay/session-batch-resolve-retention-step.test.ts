@@ -20,14 +20,24 @@ jest.mock('./sessions/metrics', () => ({
 describe('createResolveRetentionStep', () => {
     let mockRetentionService: jest.Mocked<RetentionService>
     let mockBatch: jest.Mocked<Pick<SessionBatchRecorder, 'getRetention'>>
-    let mockSessionBatchManager: jest.Mocked<Pick<SessionBatchManager, 'getCurrentBatch'>>
+    let mockSessionBatchManager: jest.Mocked<Pick<SessionBatchManager, 'getCurrentBatch' | 'trackDroppedOffset'>>
 
-    // Minimal element carrying just what the step reads (team id + session_id header).
-    const element = (teamId: number, sessionId: string): { team: TeamForReplay; headers: SessionReplayHeaders } =>
+    // Minimal element carrying just what the step reads (message offset, team id, session_id header).
+    const element = (
+        teamId: number,
+        sessionId: string,
+        partition = 0,
+        offset = 0
+    ): { message: { partition: number; offset: number }; team: TeamForReplay; headers: SessionReplayHeaders } =>
         ({
+            message: { partition, offset },
             team: { teamId, consoleLogIngestionEnabled: false, aiTrainingOptedIn: true },
             headers: { token: 'token', session_id: sessionId, distinct_id: 'distinct-1' },
-        }) as unknown as { team: TeamForReplay; headers: SessionReplayHeaders }
+        }) as unknown as {
+            message: { partition: number; offset: number }
+            team: TeamForReplay
+            headers: SessionReplayHeaders
+        }
 
     const createStep = () =>
         createResolveRetentionStep(mockRetentionService, mockSessionBatchManager as unknown as SessionBatchManager)
@@ -41,9 +51,10 @@ describe('createResolveRetentionStep', () => {
         mockBatch = { getRetention: jest.fn().mockReturnValue(undefined) } as unknown as jest.Mocked<
             Pick<SessionBatchRecorder, 'getRetention'>
         >
-        mockSessionBatchManager = { getCurrentBatch: jest.fn().mockReturnValue(mockBatch) } as unknown as jest.Mocked<
-            Pick<SessionBatchManager, 'getCurrentBatch'>
-        >
+        mockSessionBatchManager = {
+            getCurrentBatch: jest.fn().mockReturnValue(mockBatch),
+            trackDroppedOffset: jest.fn(),
+        } as unknown as jest.Mocked<Pick<SessionBatchManager, 'getCurrentBatch' | 'trackDroppedOffset'>>
     })
 
     it('resolves the batch in one call (keyed on the session_id header) and attaches retention', async () => {
@@ -103,7 +114,7 @@ describe('createResolveRetentionStep', () => {
         expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['30d', '30d'])
     })
 
-    it('drops an unresolvable session and keeps the rest', async () => {
+    it('drops an unresolvable session, tracks its offset so it still commits, and keeps the rest', async () => {
         mockRetentionService.resolveSessionRetentions.mockResolvedValue(
             new SessionMap<RetentionResolution>()
                 .set(999, 'gone', { resolved: false })
@@ -111,7 +122,7 @@ describe('createResolveRetentionStep', () => {
         )
         const step = createStep()
 
-        const results = await step([element(999, 'gone'), element(2, 'ok')])
+        const results = await step([element(999, 'gone', 4, 42), element(2, 'ok')])
 
         expect(mockRetentionService.resolveSessionRetentions).toHaveBeenCalledWith(
             new SessionSet().add(999, 'gone').add(2, 'ok')
@@ -119,6 +130,10 @@ describe('createResolveRetentionStep', () => {
         expect(results[0].type).toBe(PipelineResultType.DROP)
         expect(isOkResult(results[1]) ? results[1].value.retentionPeriod : null).toBe('90d')
         expect(SessionBatchMetrics.incrementSessionsDroppedMissingRetention).toHaveBeenCalledTimes(1)
+        // The dropped message never reaches the recorder, so the step must track its offset itself —
+        // otherwise a partition whose whole batch is dropped would never commit and would replay forever.
+        expect(mockSessionBatchManager.trackDroppedOffset).toHaveBeenCalledTimes(1)
+        expect(mockSessionBatchManager.trackDroppedOffset).toHaveBeenCalledWith(4, 42)
     })
 
     it('propagates a transient failure so the retry wrapper can retry the whole step', async () => {

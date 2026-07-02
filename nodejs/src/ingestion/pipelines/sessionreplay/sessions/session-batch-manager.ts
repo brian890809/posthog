@@ -129,6 +129,26 @@ export class SessionBatchManager {
     }
 
     /**
+     * Track the Kafka offset of a message that a pre-record batch step dropped (e.g. unresolvable
+     * retention, blocked or deleted session), so its offset still gets committed on the next flush.
+     *
+     * TODO: Kafka offset management and partition-revocation handling need a pipeline-wide refactor.
+     * Offset tracking is currently split across two disconnected places: the recorder tracks an
+     * offset when it records or ignores a message, and any pre-record batch step that drops a message
+     * must remember to call this so the drop's offset isn't lost. `KafkaOffsetManager.commit()` only
+     * emits partitions it has seen, so a message dropped before it reaches the recorder would never
+     * have its offset tracked — and a partition whose entire batch is dropped would never commit and
+     * would replay forever on restart. This method is a stopgap that keeps offsets progressing, but
+     * the design is fragile: the two tracking phases can race (a dropped high offset overwritten by a
+     * later-recorded lower offset, causing idempotent reprocessing), and revocation is only modeled in
+     * the recorder. The real fix is a single offset-tracking stage that observes every message's final
+     * disposition (record / drop / dlq) and owns commit and partition revocation for the whole pipeline.
+     */
+    public trackDroppedOffset(partition: number, offset: number): void {
+        this.offsetManager.trackOffset({ partition, offset })
+    }
+
+    /**
      * Flushes the current batch and replaces it with a new one
      */
     public async flush(): Promise<void> {
