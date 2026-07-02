@@ -2,11 +2,8 @@ import { logger } from '~/common/utils/logger'
 import { BatchProcessingStep } from '~/ingestion/framework/base-batch-pipeline'
 import { drop, ok } from '~/ingestion/framework/results'
 import { RetentionPeriod } from '~/ingestion/pipelines/sessionreplay/shared/constants'
-import {
-    RetentionResolution,
-    RetentionService,
-} from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
-import { SessionMap, SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
+import { RetentionService } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
+import { SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
 import { SessionBatchMetrics } from './sessions/metrics'
@@ -40,11 +37,7 @@ export function createResolveRetentionStep<T extends { team: TeamForReplay; head
                 toResolve.add(value.team.teamId, value.headers.session_id)
             }
         })
-        // Skip the service entirely when the batch already had every session's retention.
-        const resolutions =
-            toResolve.size > 0
-                ? await retentionService.resolveSessionRetentions(toResolve)
-                : new SessionMap<RetentionResolution>()
+        const resolutions = await retentionService.resolveSessionRetentions(toResolve)
 
         return values.map((value, index) => {
             const cached = batchRetentions[index]

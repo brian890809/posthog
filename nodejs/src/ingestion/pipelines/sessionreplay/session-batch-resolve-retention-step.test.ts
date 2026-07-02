@@ -98,13 +98,14 @@ describe('createResolveRetentionStep', () => {
         expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['90d', '1y'])
     })
 
-    it('skips the service entirely when every session is already in the batch', async () => {
+    it('sends nothing to the service when every session is already in the batch', async () => {
         mockBatch.getRetention.mockReturnValue('30d')
         const step = createStep()
 
         const results = await step([element(1, 'a'), element(2, 'b')])
 
-        expect(mockRetentionService.resolveSessionRetentions).not.toHaveBeenCalled()
+        // Everything came from the batch, so the resolve set is empty (the service no-ops on it).
+        expect(resolvedSessions()).toEqual([])
         expect(results.map((r) => (isOkResult(r) ? r.value.retentionPeriod : null))).toEqual(['30d', '30d'])
     })
 
