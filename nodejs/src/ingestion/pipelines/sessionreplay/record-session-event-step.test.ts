@@ -5,6 +5,7 @@ import { ParsedMessageData } from '~/ingestion/pipelines/sessionreplay/kafka/typ
 import { SessionRecordingIngesterMetrics } from '~/ingestion/pipelines/sessionreplay/metrics'
 import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
+import { createMockSessionKey } from '~/ingestion/pipelines/sessionreplay/shared/test-helpers'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 
 import { RecordSessionEventStepInput, createRecordSessionEventStep } from './record-session-event-step'
@@ -51,6 +52,7 @@ describe('createRecordSessionEventStep', () => {
         team,
         parsedMessage: createParsedMessage(overrides),
         retentionPeriod: '30d',
+        sessionKey: createMockSessionKey(),
     })
 
     beforeEach(() => {
@@ -81,7 +83,8 @@ describe('createRecordSessionEventStep', () => {
                 team: defaultTeam,
                 message: input.parsedMessage,
             },
-            '30d'
+            '30d',
+            input.sessionKey
         )
     })
 

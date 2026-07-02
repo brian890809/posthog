@@ -11,12 +11,15 @@ import { TopHogRegistry } from '~/ingestion/framework/extensions/tophog'
 import { drop, ok, redirect } from '~/ingestion/framework/results'
 import { SessionBatchManager } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-manager'
 import { SessionBatchRecorder } from '~/ingestion/pipelines/sessionreplay/sessions/session-batch-recorder'
+import { SessionFilter } from '~/ingestion/pipelines/sessionreplay/sessions/session-filter'
+import { SessionTracker } from '~/ingestion/pipelines/sessionreplay/sessions/session-tracker'
 import {
     RetentionResolution,
     RetentionService,
 } from '~/ingestion/pipelines/sessionreplay/shared/retention/retention-service'
 import { SessionMap, SessionSet } from '~/ingestion/pipelines/sessionreplay/shared/session-map'
 import { TeamService } from '~/ingestion/pipelines/sessionreplay/shared/teams/team-service'
+import { createMockKeyStore } from '~/ingestion/pipelines/sessionreplay/shared/test-helpers'
 import { TeamForReplay } from '~/ingestion/pipelines/sessionreplay/teams/types'
 import { createMockIngestionOutputs } from '~/tests/helpers/mock-ingestion-outputs'
 
@@ -104,6 +107,17 @@ describe('session-replay-pipeline', () => {
             return Promise.resolve(resolutions)
         }),
     } as unknown as RetentionService
+
+    // Every session resolves as already-seen, unblocked, and with a cleartext key so messages flow
+    // through to recording.
+    const sessionTracker = {
+        trackSession: jest.fn().mockResolvedValue(false),
+    } as unknown as SessionTracker
+    const sessionFilter = {
+        handleNewSession: jest.fn().mockResolvedValue(undefined),
+        isBlocked: jest.fn().mockResolvedValue(false),
+    } as unknown as SessionFilter
+    const keyStore = createMockKeyStore()
 
     const defaultTeam: TeamForReplay = {
         teamId: 1,
@@ -267,6 +281,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -300,6 +317,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -326,6 +346,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -360,6 +383,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -410,6 +436,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -442,6 +471,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -470,6 +502,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -515,6 +550,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -551,6 +589,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -590,6 +631,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: teamServiceThatDropsSecond,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -616,6 +660,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -638,6 +685,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -676,6 +726,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -697,6 +750,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -718,6 +774,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -754,6 +813,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -773,7 +835,8 @@ describe('session-replay-pipeline', () => {
                         session_id: 'session-1',
                     }),
                 }),
-                '30d'
+                '30d',
+                expect.objectContaining({ sessionState: 'cleartext' })
             )
         })
 
@@ -785,6 +848,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -813,6 +879,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -839,6 +908,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: teamServiceThatReturnsNull,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -861,6 +933,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -888,6 +963,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -915,6 +993,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -942,6 +1023,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -990,6 +1074,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
@@ -1037,6 +1124,9 @@ describe('session-replay-pipeline', () => {
                 promiseScheduler,
                 teamService: mockTeamService,
                 retentionService,
+                sessionTracker,
+                sessionFilter,
+                keyStore,
                 topHog,
                 sessionBatchManager: mockSessionBatchManager,
                 isDebugLoggingEnabled,
