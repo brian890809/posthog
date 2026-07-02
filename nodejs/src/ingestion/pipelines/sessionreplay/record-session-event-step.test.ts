@@ -129,12 +129,11 @@ describe('createRecordSessionEventStep', () => {
     })
 
     it('should preserve additional input properties', async () => {
-        const step = createRecordSessionEventStep({
+        const step = createRecordSessionEventStep<RecordSessionEventStepInput & { extraProperty: string }>({
             sessionBatchManager: mockSessionBatchManager,
             isDebugLoggingEnabled: () => false,
         })
 
-        // Input with extra properties
         const input = {
             ...createInput(),
             extraProperty: 'should be preserved',
@@ -144,7 +143,7 @@ describe('createRecordSessionEventStep', () => {
 
         expect(result.type).toBe(PipelineResultType.OK)
         if (result.type === PipelineResultType.OK) {
-            expect((result.value as any).extraProperty).toBe('should be preserved')
+            expect(result.value.extraProperty).toBe('should be preserved')
         }
     })
 })
