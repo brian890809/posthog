@@ -180,7 +180,6 @@ def _upload_prepared_slack_attachments(
     task_run_id: Any,
     task_id: Any,
     team_id: int,
-    existing_artifacts: list[Any] | None,
     prepared: PreparedSlackAttachments,
     channel: str,
     thread_ts: str,
@@ -189,14 +188,8 @@ def _upload_prepared_slack_attachments(
     if not prepared.artifacts:
         return [], skipped_messages
 
-    existing_ids = {
-        str(artifact.get("id"))
-        for artifact in (existing_artifacts or [])
-        if isinstance(artifact, dict) and artifact.get("id")
-    }
-
     try:
-        manifest = tasks_facade.upload_task_run_artifacts(
+        result = tasks_facade.upload_task_run_artifacts(
             task_run_id,
             task_id,
             team_id,
@@ -212,7 +205,7 @@ def _upload_prepared_slack_attachments(
         skipped_messages.append("Slack attachment(s) could not be uploaded to the agent workspace.")
         return [], skipped_messages
 
-    if manifest is None:
+    if result is None:
         logger.warning(
             "slack_attachment_upload_run_not_found",
             task_run_id=str(task_run_id),
@@ -222,21 +215,7 @@ def _upload_prepared_slack_attachments(
         skipped_messages.append("Slack attachment(s) could not be uploaded to the agent workspace.")
         return [], skipped_messages
 
-    uploaded_candidates = [
-        artifact
-        for artifact in manifest
-        if isinstance(artifact, dict)
-        and str(artifact.get("id")) not in existing_ids
-        and artifact.get("source") == "slack_user_attachment"
-    ]
-    uploaded = uploaded_candidates[-len(prepared.artifacts) :]
-    if len(uploaded) < len(prepared.artifacts):
-        logger.warning(
-            "slack_attachment_upload_manifest_mismatch",
-            task_run_id=str(task_run_id),
-            expected=len(prepared.artifacts),
-            uploaded=len(uploaded),
-        )
+    uploaded, _manifest = result
     return uploaded, skipped_messages
 
 
@@ -644,7 +623,6 @@ def create_posthog_code_task_for_repo_activity(
             task_run_id=task_run.id,
             task_id=created.task_id,
             team_id=created.team_id,
-            existing_artifacts=task_run.artifacts,
             prepared=prepared_attachments,
             channel=channel,
             thread_ts=thread_ts,
@@ -701,10 +679,11 @@ def create_posthog_code_task_for_repo_activity(
             tasks_facade.update_task_run_state(task_run.id, updates=state_updates)
         except Exception:
             logger.exception(
-                "posthog_code_persist_mention_workflow_id_failed",
+                "posthog_code_persist_initial_run_state_failed",
                 task_run_id=str(task_run.id),
                 channel=channel,
                 thread_ts=thread_ts,
+                state_keys=sorted(state_updates),
             )
 
     # 3. Now start the workflow
@@ -901,10 +880,8 @@ def forward_posthog_code_followup_activity(
             thread_ts=thread_ts,
         )
 
-    if update_block and user_text:
+    if update_block:
         user_text = f"{update_block}\n\n{user_text}"
-    elif update_block:
-        user_text = update_block
 
     if user_message_ts:
         safe_react(slack.client, channel, user_message_ts, "eyes")
@@ -921,7 +898,6 @@ def forward_posthog_code_followup_activity(
         task_run_id=task_run.id,
         task_id=mapping.task_id,
         team_id=task_run.team_id,
-        existing_artifacts=task_run.artifacts,
         prepared=prepared_attachments,
         channel=channel,
         thread_ts=thread_ts,
@@ -931,8 +907,6 @@ def forward_posthog_code_followup_activity(
         uploaded_artifacts=uploaded_attachments,
         skipped_messages=attachment_skips,
     )
-    if not user_text and not uploaded_attachments:
-        return True
 
     send_kwargs: dict[str, Any] = {"auth_token": auth_token, "timeout": 90}
     if uploaded_attachments:
@@ -1191,7 +1165,6 @@ def _resume_task_with_new_run(
         task_run_id=new_run.id,
         task_id=mapping.task_id,
         team_id=new_run.team_id,
-        existing_artifacts=new_run.artifacts,
         prepared=prepared_attachments,
         channel=channel,
         thread_ts=thread_ts,
